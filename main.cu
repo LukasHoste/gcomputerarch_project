@@ -103,11 +103,11 @@ point* generate_random_points(int amount) {
 
 
 uint8_t* scale_to_image(point* points, int amount, int width, int height) {
-    uint8_t* image_array = (uint8_t*)malloc(width * height);
+    uint8_t* image_array = (uint8_t*)calloc(width * height, sizeof(uint8_t));
     // first set all to zero
-    for (int i = 0; i < width * height; i++) {
-        image_array[i] = 0;
-    }
+    // for (int i = 0; i < width * height; i++) {
+    //     image_array[i] = 0;
+    // }
 
     for (int i = 0; i < amount; i++) {
         point current_point = points[i];
@@ -176,10 +176,14 @@ int main() {
     
     // return 0;
 
-    int amount = 100000000;
+    // int amount = 100000000;
+    // int iterations = 10000;
+
+    int amount = 1000000;
     int iterations = 10000;
-    int width = 1000;
-    int height = 1000;
+
+    int width = 200;
+    int height = 200;
 
     point* points = (point*)malloc(amount * sizeof(point));
     for (int i = 0; i < amount; i++) {
@@ -190,6 +194,22 @@ int main() {
     create_triangle_gpu(points, amount, iterations);
 
     printf("GPU computation done!\n");
+
+
+    // timing the GPU VS CPU
+    // auto start = std::chrono::high_resolution_clock::now();
+    // create_triangle(points, amount, iterations);
+    // auto end = std::chrono::high_resolution_clock::now();
+    // std::chrono::duration<double> elapsed = end - start;
+    // printf("CPU time: %f\n", elapsed.count());
+
+    //GPU
+    // start = std::chrono::high_resolution_clock::now();
+    // create_triangle_gpu(points, amount, iterations);
+    // cudaDeviceSynchronize();
+    // end = std::chrono::high_resolution_clock::now();
+    // elapsed = end - start;
+    // printf("GPU time: %f\n", elapsed.count());
 
     // scale and save the image
     uint8_t* image_array = scale_to_image(points, amount, width, height);
