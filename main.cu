@@ -110,7 +110,7 @@ uint8_t* scale_to_image(point* points, int amount, int width, int height) {
 
 int main() {
     // Define the image dimensions
-    srand(time(NULL));
+    srand(1000);
     int width = 300;
     int height = 300;
     int image_size = width * height;
