@@ -42,25 +42,94 @@ void save_black_white_image(uint8_t* image_array, int width, int height) {
     free(color_image);
 }
 
+
+struct point {
+    float x;
+    float y;
+};
+
+#define BOTTOM_LEFT_POINT {0.0, 0.0}
+#define BOTTOM_RIGHT_POINT {1.0, 0.0}
+#define TOP_POINT {0.5, 1.0}
+
+point get_random_trig_point() {
+    int random = rand() % 3;
+    if (random == 0) {
+        return BOTTOM_LEFT_POINT;
+    } else if (random == 1) {
+        return BOTTOM_RIGHT_POINT;
+    } else {
+        return TOP_POINT;
+    }
+}
+
+
+
+void create_triangle(point* points, int amount, int iterations) {
+    // the tirnalgle is on a one by one grid
+    
+
+    for (int j = 0; j < iterations; j++) {
+        for (int i = 0; i < amount; i++) {
+            point random_trig_point = get_random_trig_point();
+            point* current_point = &points[i];
+            current_point->x = 0.5 * (current_point->x + random_trig_point.x);
+            current_point->y = 0.5 * (current_point->y + random_trig_point.y);
+        }
+    }
+
+}
+
+point* generate_random_points(int amount) {
+    point* points = (point*)malloc(amount * sizeof(point));
+    for (int i = 0; i < amount; i++) {
+        points[i].x = (float)rand() / RAND_MAX;
+        points[i].y = (float)rand() / RAND_MAX;
+    }
+    return points;
+}
+
+
+uint8_t* scale_to_image(point* points, int amount, int width, int height) {
+    uint8_t* image_array = (uint8_t*)malloc(width * height);
+    // first set all to zero
+    for (int i = 0; i < width * height; i++) {
+        image_array[i] = 0;
+    }
+
+    for (int i = 0; i < amount; i++) {
+        point current_point = points[i];
+        int x = current_point.x * width;
+        int y = height - current_point.y * height;
+        image_array[y * width + x] = 255;
+    }
+    return image_array;
+}
+
+
+
 int main() {
     // Define the image dimensions
-    int width = 1920;
-    int height = 1080;
+    srand(time(NULL));
+    int width = 300;
+    int height = 300;
     int image_size = width * height;
     
-    // Allocate memory for the image
-    uint8_t* image_array = (uint8_t*)malloc(image_size);
+    // Generate random points
+    int amount = 100000;
+    point* points = generate_random_points(amount);
+    create_triangle(points, amount, 1000);
+    uint8_t* image_array = scale_to_image(points, amount, width, height);
+
+    printf("done\n");
     
-    // Fill the image with random data
-    for (int i = 0; i < image_size; i++) {
-        image_array[i] = rand() % 256;
-    }
     
     // Save the image
     save_black_white_image(image_array, width, height);
     
     // Free the memory
     free(image_array);
+    free(points);
     
     return 0;
 }
