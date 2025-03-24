@@ -106,8 +106,8 @@ void create_triangle_gpu(point* points, int amount, int iterations, int width, i
 int main() {
     int amount = 50000000;
     int iterations = 20;
-    int width = 1000;
-    int height = 1000;
+    int width = 500;
+    int height = 500;
 
     point* points = (point*)malloc(amount * sizeof(point));
     for (int i = 0; i < amount; i++) {
@@ -119,5 +119,9 @@ int main() {
     printf("GPU computation done! Iteration images saved.\n");
 
     free(points);
+
+    // call previoysly mentioned ffmpeg command to get video
+    system("ffmpeg -framerate 5 -i vid_imgs/iteration_%d.ppm -c:v libx264 -pix_fmt yuv420p output.mp4");
+
     return 0;
 }
