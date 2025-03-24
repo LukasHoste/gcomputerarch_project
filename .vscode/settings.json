@@ -82,6 +82,7 @@
         "thread": "cpp",
         "__nullptr": "cpp",
         "complex": "cpp",
-        "cinttypes": "cpp"
+        "cinttypes": "cpp",
+        "__locale": "cpp"
     }
 }

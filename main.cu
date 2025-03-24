@@ -84,14 +84,14 @@ Matrix get_random_trig_point() {
     }
 }
 
-__device__ Matrix get_random_trig_point_gpu(curandState* state) {
+__device__ Matrix* get_random_trig_point_gpu(curandState* state, Matrix* bottomLeft, Matrix* bottomRight, Matrix* top) {
     float random = curand_uniform(state);
     if (random < 0.33) {
-        return get_bottom_left_matrix();
+        return bottomLeft;
     } else if (random < 0.66) {
-        return get_bottom_right_matrix();
+        return bottomRight;
     } else {
-        return get_top_matrix();
+        return top;
     }
 } 
 
@@ -137,7 +137,7 @@ uint8_t* scale_to_image(Matrix* points, int amount, int width, int height) {
 
 
 // GPU version
-__global__ void create_triangle_kernel(Matrix* points, int amount, int iterations, int seed) {
+__global__ void create_triangle_kernel(Matrix* points, int amount, int iterations, int seed, Matrix bottomLeft, Matrix bottomRight, Matrix top, float* tempBuffer) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= amount) return;
 
@@ -146,9 +146,9 @@ __global__ void create_triangle_kernel(Matrix* points, int amount, int iteration
 
     for (int j = 0; j < iterations; j++) {
         // int rand_val = curand(&state) % 3;
-        Matrix random_trig_point = get_random_trig_point_gpu(&state);
-        Matrix current_point = points[idx];
-        points[idx] = random_trig_point.mult(current_point);
+        Matrix* random_trig_point = get_random_trig_point_gpu(&state, &bottomLeft, &bottomRight, &top);
+        Matrix* current_point = points + idx;
+        multAndStoreInB(random_trig_point, current_point, tempBuffer + idx * 3);
     }
 }
 
@@ -163,8 +163,15 @@ void create_triangle_gpu(Matrix* points, int amount, int iterations) {
     for (int i = 0; i < amount; i++) {
         points[i].toGpu(&d_points[i]);
     }
+    float* tempBuffer;
+    cudaMalloc(&tempBuffer, amount * 3 * sizeof(float));
+
+    Matrix* bottomLeftGpuMatrix;
+    Matrix* bottomRightGpuMatrix;
+    Matrix* TODO
+
     
-    create_triangle_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_points, amount, iterations, time(NULL));
+    create_triangle_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_points, amount, iterations, time(NULL),);
     cudaMemcpy(points, d_points, amount * sizeof(Matrix), cudaMemcpyDeviceToHost);
     for (int i = 0; i < amount; i++) {
         points[i].toCpu(&d_points[i]);

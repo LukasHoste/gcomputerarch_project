@@ -1,7 +1,7 @@
 #include "matrix.h"
 #include <stdio.h>
 
-__device__  __host__ Matrix::Matrix(int rows, int cols) {
+Matrix::Matrix(int rows, int cols) {
     this->is_gpu = false;
     this->rows = rows;
     this->cols = cols;
@@ -19,7 +19,7 @@ Matrix::Matrix() {
     this->is_gpu = false;
 }
 
-__device__  __host__ Matrix Matrix::fromVect(const std::vector<std::vector<float>>& init) {
+Matrix Matrix::fromVect(const std::vector<std::vector<float>>& init) {
     Matrix result = Matrix(init.size(), init[0].size());
 
     for (int i = 0; i < result.rows; i++) {
@@ -30,7 +30,7 @@ __device__  __host__ Matrix Matrix::fromVect(const std::vector<std::vector<float
     return result;
 }
 
-__device__  __host__ Matrix::~Matrix() {
+ Matrix::~Matrix() {
     if (this->is_gpu) {
         return;
     }
@@ -38,7 +38,7 @@ __device__  __host__ Matrix::~Matrix() {
     this->data = NULL;
 }
 
-__device__  __host__ Matrix::Matrix(const Matrix& other) {
+Matrix::Matrix(const Matrix& other) {
     if (this->is_gpu || other.is_gpu) {
         return;
     }
@@ -51,7 +51,7 @@ __device__  __host__ Matrix::Matrix(const Matrix& other) {
     }
 }
 
-__device__  __host__ Matrix& Matrix::operator=(const Matrix& other) {
+Matrix& Matrix::operator=(const Matrix& other) {
     if (this->is_gpu || other.is_gpu) {
         return *this;
     }
@@ -97,7 +97,7 @@ __device__  __host__  Matrix Matrix::add(Matrix other) {
     return result;
 }
 
-__device__  __host__  Matrix Matrix::mult(Matrix other) {
+Matrix Matrix::mult(Matrix other) {
     Matrix result = Matrix(this->rows, other.cols);
     if (this->cols != other.rows) {
         printf("Matrix dimensions must match\n");
@@ -114,6 +114,7 @@ __device__  __host__  Matrix Matrix::mult(Matrix other) {
     }
     return result;
 }
+
 
 // already allocated!
 void Matrix::toGpu(Matrix* gpu_matrix) {
@@ -137,4 +138,34 @@ void Matrix::toCpu(Matrix* cpu_matrix) {
     cudaMemcpy(data, cpu_matrix->data, this->rows * this->cols * sizeof(float), cudaMemcpyDeviceToHost);
     cudaFree(cpu_matrix->data);
     cpu_matrix->data = data;
+}
+
+__device__ __host__ void multAndStoreInB(Matrix* a, Matrix* b, float* tempBuffer) {
+    // b gets copied into the temp buffer
+    /*for (int i = 0; i < b->rows; i++) {
+        for (int j = 0; j < b->cols; i++) {
+            tempBuffer[i *b->cols + j] = b->data[i * b->cols + j];
+        }
+    }*/
+
+
+    if (a->cols != b->rows) {
+        printf("Matrix dimensions must match\n");
+        return;
+    }
+    for (int i = 0; i < a->rows; i++) {
+        for (int j = 0; j < b->cols; j++) {
+            float sum = 0;
+            for (int k = 0; k < a->cols; k++) {
+                sum += a->data[i * a->cols + k] * b->data[k * b->cols + j];
+            }
+            tempBuffer[i * b->cols + j] = sum;
+        }
+    }
+
+    for (int i = 0; i < b->rows; i++) {
+        for (int j = 0; j < b->cols; i++) {
+            b->data[i * b->cols + j] =  tempBuffer[i *b->cols + j];
+        }
+    }
 }
