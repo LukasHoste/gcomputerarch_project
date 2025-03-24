@@ -4,47 +4,7 @@
 #include <curand.h>
 #include <curand_kernel.h>
 #include <math.h>
-
-void save_image_array(uint8_t* image_array, int width, int height, int channels) {
-    /*
-     * Save the data of an (RGB) image as a pixel map.
-     * 
-     * Parameters:
-     *  - param1: The data of an (RGB) image as a 1D array
-     * 
-     */            
-    // Try opening the file
-    FILE *imageFile;
-    imageFile=fopen("./output_image.ppm","wb");
-    if(imageFile==NULL){
-        perror("ERROR: Cannot open output file");
-        exit(EXIT_FAILURE);
-    }
-    
-    // Configure the file
-    fprintf(imageFile,"P6\n");               // P6 filetype
-    fprintf(imageFile,"%d %d\n", width, height);      // dimensions
-    fprintf(imageFile,"255\n");              // Max pixel
-    
-    // Write the image
-    fwrite(image_array, 1, width * height * channels, imageFile);
-    
-    // Close the file
-    fclose(imageFile);
-}
-
-
-void save_black_white_image(uint8_t* image_array, int width, int height) {
-    uint8_t* color_image = (uint8_t*)malloc(width * height * 3);
-    for (int i = 0; i < width * height; i++) {
-        color_image[i * 3] = image_array[i];
-        color_image[i * 3 + 1] = image_array[i];
-        color_image[i * 3 + 2] = image_array[i];
-    }
-    save_image_array(color_image, width, height, 3);
-    free(color_image);
-}
-
+#include <vector>
 
 struct point {
     float x;
@@ -66,62 +26,41 @@ __device__ point get_random_trig_point_gpu(curandState* state) {
     }
 }
 
-point get_random_trig_point() {
-    int random = rand() % 3;
-    if (random == 0) {
-        return BOTTOM_LEFT_POINT;
-    } else if (random == 1) {
-        return BOTTOM_RIGHT_POINT;
-    } else {
-        return TOP_POINT;
+void save_image_array(uint8_t* image_array, int width, int height, int channels, int iteration) {
+    char filename[50];
+    snprintf(filename, 50, "vid_imgs/iteration_%d.ppm", iteration);
+    FILE *imageFile = fopen(filename, "wb");
+    if (imageFile == NULL) {
+        perror("ERROR: Cannot open output file");
+        exit(EXIT_FAILURE);
     }
+    fprintf(imageFile, "P6\n%d %d\n255\n", width, height);
+    fwrite(image_array, 1, width * height * channels, imageFile);
+    fclose(imageFile);
 }
 
-
-void create_triangle(point* points, int amount, int iterations) {
-    // the triangle is on a one by one grid
-
-    for (int j = 0; j < iterations; j++) {
-        for (int i = 0; i < amount; i++) {
-            point random_trig_point = get_random_trig_point();
-            point* current_point = &points[i];
-            current_point->x = 0.5 * (current_point->x + random_trig_point.x);
-            current_point->y = 0.5 * (current_point->y + random_trig_point.y);
-        }
+void save_black_white_image(uint8_t* image_array, int width, int height, int iteration) {
+    uint8_t* color_image = (uint8_t*)malloc(width * height * 3);
+    for (int i = 0; i < width * height; i++) {
+        color_image[i * 3] = image_array[i];
+        color_image[i * 3 + 1] = image_array[i];
+        color_image[i * 3 + 2] = image_array[i];
     }
-
+    save_image_array(color_image, width, height, 3, iteration);
+    free(color_image);
 }
-
-point* generate_random_points(int amount) {
-    point* points = (point*)malloc(amount * sizeof(point));
-    for (int i = 0; i < amount; i++) {
-        points[i].x = (float)rand() / RAND_MAX;
-        points[i].y = (float)rand() / RAND_MAX;
-    }
-    return points;
-}
-
 
 uint8_t* scale_to_image(point* points, int amount, int width, int height) {
     uint8_t* image_array = (uint8_t*)calloc(width * height, sizeof(uint8_t));
-    // first set all to zero
-    // for (int i = 0; i < width * height; i++) {
-    //     image_array[i] = 0;
-    // }
-
     for (int i = 0; i < amount; i++) {
-        point current_point = points[i];
-        // int x = current_point.x * width;
-        // int y = height - current_point.y * height;
-        int x = fminf(current_point.x * width, width - 1);
-        int y = fminf(height - (current_point.y * height), height - 1);
+        int x = fminf(points[i].x * width, width - 1);
+        int y = fminf(height - (points[i].y * height), height - 1);
         image_array[y * width + x] = 255;
     }
     return image_array;
 }
 
-// GPU version
-__global__ void create_triangle_kernel(point* points, int amount, int iterations, int seed) {
+__global__ void create_triangle_kernel(point* points, int amount, int iterations, int seed, point* all_points) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= amount) return;
 
@@ -129,61 +68,46 @@ __global__ void create_triangle_kernel(point* points, int amount, int iterations
     curand_init(seed + idx, 0, 0, &state);
 
     for (int j = 0; j < iterations; j++) {
-        // int rand_val = curand(&state) % 3;
         point random_trig_point = get_random_trig_point_gpu(&state);
         points[idx].x = 0.5 * (points[idx].x + random_trig_point.x);
         points[idx].y = 0.5 * (points[idx].y + random_trig_point.y);
+        all_points[j * amount + idx] = points[idx];
     }
 }
 
-void create_triangle_gpu(point* points, int amount, int iterations) {
+void create_triangle_gpu(point* points, int amount, int iterations, int width, int height) {
     point* d_points;
+    point* d_all_points;
     cudaMalloc(&d_points, amount * sizeof(point));
+    cudaMalloc(&d_all_points, amount * iterations * sizeof(point));
     cudaMemcpy(d_points, points, amount * sizeof(point), cudaMemcpyHostToDevice);
 
     int threadsPerBlock = 256;
     int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
     
-    create_triangle_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_points, amount, iterations, time(NULL));
+    create_triangle_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_points, amount, iterations, time(NULL), d_all_points);
     cudaMemcpy(points, d_points, amount * sizeof(point), cudaMemcpyDeviceToHost);
+
+    point* all_points = (point*)malloc(amount * iterations * sizeof(point));
+    cudaMemcpy(all_points, d_all_points, amount * iterations * sizeof(point), cudaMemcpyDeviceToHost);
     
+    for (int i = 0; i < iterations; i++) {
+        uint8_t* image_array = scale_to_image(&all_points[i * amount], amount, width, height);
+        save_black_white_image(image_array, width, height, i);
+        free(image_array);
+    }
+
+    free(all_points);
     cudaFree(d_points);
+    cudaFree(d_all_points);
 }
 
-
+// to get video use ffmpeg -framerate 5 -i vid_imgs/iteration_%d.ppm -c:v libx264 -pix_fmt yuv420p output.mp4
 int main() {
-    // // Define the image dimensions
-    // srand(1000);
-    // int width = 300;
-    // int height = 300;
-    // int image_size = width * height;
-    
-    // // Generate random points
-    // int amount = 100000;
-    // point* points = generate_random_points(amount);
-    // create_triangle(points, amount, 1000);
-    // uint8_t* image_array = scale_to_image(points, amount, width, height);
-
-    // printf("done\n");
-    
-    
-    // // Save the image
-    // save_black_white_image(image_array, width, height);
-    
-    // // Free the memory
-    // free(image_array);
-    // free(points);
-    
-    // return 0;
-
-    // int amount = 100000000;
-    // int iterations = 10000;
-
-    int amount = 100000;
-    int iterations = 1000;
-
-    int width = 200;
-    int height = 200;
+    int amount = 50000000;
+    int iterations = 20;
+    int width = 1000;
+    int height = 1000;
 
     point* points = (point*)malloc(amount * sizeof(point));
     for (int i = 0; i < amount; i++) {
@@ -191,33 +115,9 @@ int main() {
         points[i].y = (float)rand() / RAND_MAX;
     }
 
-    // create_triangle_gpu(points, amount, iterations);
+    create_triangle_gpu(points, amount, iterations, width, height);
+    printf("GPU computation done! Iteration images saved.\n");
 
-    // printf("GPU computation done!\n");
-
-
-    // timing the GPU VS CPU
-    auto start = std::chrono::high_resolution_clock::now();
-    create_triangle(points, amount, iterations);
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    printf("CPU time: %f\n", elapsed.count());
-
-
-    //GPU
-    start = std::chrono::high_resolution_clock::now();
-    create_triangle_gpu(points, amount, iterations);
-    cudaDeviceSynchronize();
-    end = std::chrono::high_resolution_clock::now();
-    elapsed = end - start;
-    printf("GPU time: %f\n", elapsed.count());
-
-    // scale and save the image
-    uint8_t* image_array = scale_to_image(points, amount, width, height);
-    save_black_white_image(image_array, width, height);
-
-    // Free the memory
     free(points);
-    free(image_array);
     return 0;
 }
