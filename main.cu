@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <chrono>
+#include <curand.h>
+#include <curand_kernel.h>
+#include <math.h>
 #include "matrix.h"
 
 void save_image_array(uint8_t* image_array, int width, int height, int channels) {
@@ -71,16 +74,26 @@ Matrix get_top_matrix() {
 
 
 Matrix get_random_trig_point() {
-    int random = rand() % 9;
-    if (random < 5) {
+    int random = rand() % 3;
+    if (random < 1) {
         return get_bottom_left_matrix();
-    } else if (random < 7) {
+    } else if (random < 2) {
         return get_bottom_right_matrix();
     } else {
         return get_top_matrix();
     }
 }
 
+__device__ Matrix get_random_trig_point_gpu(curandState* state) {
+    float random = curand_uniform(state);
+    if (random < 0.33) {
+        return get_bottom_left_matrix();
+    } else if (random < 0.66) {
+        return get_bottom_right_matrix();
+    } else {
+        return get_top_matrix();
+    }
+} 
 
 
 void create_triangle(Matrix* points, int amount, int iterations) {
@@ -109,6 +122,7 @@ Matrix* generate_random_points(int amount) {
 }
 
 
+
 uint8_t* scale_to_image(Matrix* points, int amount, int width, int height) {
     uint8_t* image_array = (uint8_t*)calloc(width * height, sizeof(uint8_t));
 
@@ -122,6 +136,42 @@ uint8_t* scale_to_image(Matrix* points, int amount, int width, int height) {
 }
 
 
+// GPU version
+__global__ void create_triangle_kernel(Matrix* points, int amount, int iterations, int seed) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= amount) return;
+
+    curandState state;
+    curand_init(seed + idx, 0, 0, &state);
+
+    for (int j = 0; j < iterations; j++) {
+        // int rand_val = curand(&state) % 3;
+        Matrix random_trig_point = get_random_trig_point_gpu(&state);
+        Matrix current_point = points[idx];
+        points[idx] = random_trig_point.mult(current_point);
+    }
+}
+
+
+void create_triangle_gpu(Matrix* points, int amount, int iterations) {
+    Matrix* d_points;
+    cudaMalloc(&d_points, amount * sizeof(Matrix));
+    cudaMemcpy(d_points, points, amount * sizeof(Matrix), cudaMemcpyHostToDevice);
+
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
+    for (int i = 0; i < amount; i++) {
+        points[i].toGpu(&d_points[i]);
+    }
+    
+    create_triangle_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_points, amount, iterations, time(NULL));
+    cudaMemcpy(points, d_points, amount * sizeof(Matrix), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < amount; i++) {
+        points[i].toCpu(&d_points[i]);
+    }
+    
+    cudaFree(d_points);
+}
 
 int main() {
     srand(1000);
