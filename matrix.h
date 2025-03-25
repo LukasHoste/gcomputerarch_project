@@ -1,21 +1,52 @@
 #ifndef MATRIX_H
 #define MATRIX_H
-#include <vector>
+
+template<int TRows, int TCols>
 class Matrix {
-public:
-    Matrix(int rows, int cols);
-    Matrix(const Matrix& other);
-    Matrix& operator=(const Matrix& other);
-    ~Matrix();
-    void set(int row, int col, float value);
-    float get(int row, int col);
-    Matrix add(Matrix other);
-    Matrix mult(Matrix other);
-    void print();
-    static Matrix fromVect(const std::vector<std::vector<float>>& init);
-private:
-    int rows;
-    int cols;
-    float *data;
+    public:
+    double data[TRows][TCols];
+    const int cols = TCols;
+    const int rows = TRows;
+
+    double& at(int row, int col) {
+        return data[row][col];
+    }
+
+    const double& at(int row, int col) const {
+        return data[row][col];
+    }
+
+    void setData(const double newData[TRows][TCols]) {
+        for (int i = 0; i < TRows; i++) {
+            for (int j = 0; j < TCols; j++) {
+                data[i][j] = newData[i][j];
+            }
+        }
+    }
+    template<int TColsB>
+    void mult(Matrix<TCols, TColsB>* b, Matrix<TRows, TColsB>* result) {
+
+        for (int i = 0; i < TRows; i++) {
+            for (int j = 0; j < TColsB; j++) {
+                double sum = 0;
+                for (int k = 0; k < cols; k++) {
+                    sum += this->at(i, k) * b->at(k, j);
+                }
+                result->at(i, j) = sum;
+            }
+        }
+    }
+
+    Matrix<TRows, TCols>& operator=(const Matrix<TRows, TCols>& other) {
+        for (int i = 0; i < TRows; i++) {
+            for (int j = 0; j < TCols; j++) {
+                data[i][j] = other.data[i][j];
+            }
+        }
+        return *this;
+    }
+
+
 };
+
 #endif // MATRIX_H
