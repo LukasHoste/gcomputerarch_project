@@ -1,18 +1,18 @@
 #ifndef MATRIX_H
 #define MATRIX_H
 
-template<int TRows, int TCols>
+template<size_t TRows, size_t TCols>
 class Matrix {
     public:
     double data[TRows][TCols];
-    const int cols = TCols;
-    const int rows = TRows;
+    const size_t cols = TCols;
+    const size_t rows = TRows;
 
-    __device__ __host__ double& at(int row, int col) {
+    __device__ __host__ double& at(size_t row, size_t col) {
         return data[row][col];
     }
 
-    __device__ __host__ const double& at(int row, int col) const {
+    __device__ __host__ const double& at(size_t row, size_t col) const {
         return data[row][col];
     }
 
@@ -23,8 +23,8 @@ class Matrix {
             }
         }
     }
-    template<int TColsB>
-    __device__ __host__ void mult(Matrix<TCols, TColsB>* b, Matrix<TRows, TColsB>* result) {
+    template<size_t TColsB>
+    __device__ __host__ void mult(const Matrix<TCols, TColsB>* b, Matrix<TRows, TColsB>* result) const {
 
         for (int i = 0; i < TRows; i++) {
             for (int j = 0; j < TColsB; j++) {
@@ -35,6 +35,14 @@ class Matrix {
                 result->at(i, j) = sum;
             }
         }
+    }
+
+
+    template<size_t TColsB>
+    __device__ __host__ Matrix<TRows, TColsB> operator*(const Matrix<TCols, TColsB>& b) const {
+        Matrix<TRows, TColsB> result;
+        this->mult(&b, &result);
+        return result;
     }
 
     __device__ __host__ Matrix<TRows, TCols>& operator=(const Matrix<TRows, TCols>& other) {
