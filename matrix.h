@@ -8,11 +8,11 @@ class Matrix {
     const int cols = TCols;
     const int rows = TRows;
 
-    double& at(int row, int col) {
+    __device__ __host__ double& at(int row, int col) {
         return data[row][col];
     }
 
-    const double& at(int row, int col) const {
+    __device__ __host__ const double& at(int row, int col) const {
         return data[row][col];
     }
 
@@ -24,7 +24,7 @@ class Matrix {
         }
     }
     template<int TColsB>
-    void mult(Matrix<TCols, TColsB>* b, Matrix<TRows, TColsB>* result) {
+    __device__ __host__ void mult(Matrix<TCols, TColsB>* b, Matrix<TRows, TColsB>* result) {
 
         for (int i = 0; i < TRows; i++) {
             for (int j = 0; j < TColsB; j++) {
@@ -37,7 +37,7 @@ class Matrix {
         }
     }
 
-    Matrix<TRows, TCols>& operator=(const Matrix<TRows, TCols>& other) {
+    __device__ __host__ Matrix<TRows, TCols>& operator=(const Matrix<TRows, TCols>& other) {
         for (int i = 0; i < TRows; i++) {
             for (int j = 0; j < TCols; j++) {
                 data[i][j] = other.data[i][j];
