@@ -175,6 +175,121 @@ __global__ void create_triangle_gpu_kernel(Matrix<3, 1>* points, int amount, int
     }
 }
 
+void save_black_white_image_with_name(uint8_t* image_array, int width, int height, const char* filename) {
+    uint8_t* color_image = (uint8_t*)malloc(width * height * 3);
+    for (int i = 0; i < width * height; i++) {
+        color_image[i * 3] = image_array[i];
+        color_image[i * 3 + 1] = image_array[i];
+        color_image[i * 3 + 2] = image_array[i];
+    }
+
+    FILE *imageFile = fopen(filename, "wb");
+    if (imageFile == NULL) {
+        perror("Cannot open output file");
+        exit(EXIT_FAILURE);
+    }
+    fprintf(imageFile, "P6\n%d %d\n255\n", width, height);
+    fwrite(color_image, 1, width * height * 3, imageFile);
+    fclose(imageFile);
+    free(color_image);
+}
+
+
+// RNG Setup Kernel (now fixed)
+__global__ void setup_rng_kernel(curandState* states, int amount, int seed) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= amount) return;
+    curand_init(seed, idx, 0, &states[idx]);
+}
+
+// GPU Kernel using persistent RNG states
+__global__ void create_triangle_gpu_kernel(
+    Matrix<3, 1>* input,
+    int amount,
+    Matrix<3, 1>* output,
+    Matrix<3,3> bottomLeftMatrix,
+    Matrix<3,3> bottomRightMatrix,
+    Matrix<3,3> topMatrix,
+    curandState* rng_states)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= amount) return;
+
+    curandState* state = &rng_states[idx];
+
+    Matrix<3,3>* random_trig_point;
+    Matrix<3,1>* current_point = input + idx;
+    Matrix<3,1>* buffer_point = output + idx;
+
+    random_trig_point = get_random_trig_point_gpu(state, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
+    random_trig_point->mult(current_point, buffer_point);
+}
+
+// Main function with fixed RNG setup
+void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int iterations,
+    const Matrix<3,3>& bottomLeftMatrix,
+    const Matrix<3,3>& bottomRightMatrix,
+    const Matrix<3,3>& topMatrix,
+    int width, int height)
+{
+    // Allocate GPU memory
+    Matrix<3, 1>* gpu_a;
+    Matrix<3, 1>* gpu_b;
+    cudaMalloc(&gpu_a, amount * sizeof(Matrix<3, 1>));
+    cudaMalloc(&gpu_b, amount * sizeof(Matrix<3, 1>));
+
+    // Copy initial points
+    cudaMemcpy(gpu_a, host_points, amount * sizeof(Matrix<3, 1>), cudaMemcpyHostToDevice);
+
+    // Allocate and setup RNG states
+    curandState* d_states;
+    cudaMalloc(&d_states, amount * sizeof(curandState));
+
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
+
+    // ✅ Pass `amount` to RNG setup kernel
+    setup_rng_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_states, amount, time(NULL));
+    cudaDeviceSynchronize();
+
+    // Buffer for saving frames
+    Matrix<3, 1>* save_buffer = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
+    bool using_a_as_input = true;
+
+    for (int j = 0; j < iterations; j++) {
+        Matrix<3, 1>* input = using_a_as_input ? gpu_a : gpu_b;
+        Matrix<3, 1>* output = using_a_as_input ? gpu_b : gpu_a;
+
+        create_triangle_gpu_kernel<<<blocksPerGrid, threadsPerBlock>>>(
+            input, amount, output,
+            bottomLeftMatrix, bottomRightMatrix, topMatrix,
+            d_states
+        );
+        cudaDeviceSynchronize();
+
+        // Copy for frame
+        cudaMemcpy(save_buffer, output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost);
+
+        // Save image
+        uint8_t* image_array = scale_to_image(save_buffer, amount, width, height);
+        char filename[64];
+        snprintf(filename, sizeof(filename), "./vid_imgs/frame_%03d.ppm", j);
+        save_black_white_image_with_name(image_array, width, height, filename);
+        free(image_array);
+
+        using_a_as_input = !using_a_as_input;
+    }
+
+    // Copy final result
+    Matrix<3, 1>* final_output = using_a_as_input ? gpu_b : gpu_a;
+    cudaMemcpy(host_points, final_output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost);
+
+    // Cleanup
+    cudaFree(gpu_a);
+    cudaFree(gpu_b);
+    cudaFree(d_states);
+    free(save_buffer);
+}
 
 void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , const Matrix<3,3>& bottomLeftMatrix, const Matrix<3,3>& bottomRightMatrix, const Matrix<3,3>& topMatrix) {
     Matrix<3, 1>* gpu_points;
@@ -217,7 +332,8 @@ int main() {
     printf("done\n");
     printf("Creating triangle...");
     //create_triangle(points, amount, 200, buffer, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
-    create_triangle_gpu(points, amount, 10000, bottomLeftMatrix, bottomRightMatrix, topMatrix);
+    // create_triangle_gpu(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix);
+    create_triangle_gpu_with_frames(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix, width, height);
     printf("done\n");
     printf("Scaling to image...");
     uint8_t* image_array = scale_to_image(points, amount, width, height);
@@ -226,6 +342,8 @@ int main() {
     
     // Save the image
     save_black_white_image(image_array, width, height);
+
+    system("ffmpeg -y -framerate 5 -i ./vid_imgs/frame_%03d.ppm -c:v libx264 -pix_fmt yuv420p output.mp4");
     
     // Free the memory
     free(image_array);
