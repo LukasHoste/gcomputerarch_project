@@ -120,7 +120,7 @@ Matrix<3, 3> create_random_shear_matrix() {
     return matrix;
 }
 Matrix<3, 3> create_random_affine_matrix() {
-    return create_random_scale_matrix() * create_random_translation_matrix();
+    return create_random_scale_matrix() * create_random_rotation_matrix()* create_random_translation_matrix();
 }
 
 
@@ -280,7 +280,7 @@ void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , cons
 
 
 int main() {
-    srand(42);
+    srand(99);
     int width = 1000;
     int height = 1000;
     int image_size = width * height;
@@ -293,7 +293,7 @@ int main() {
 
     
     // Generate random points
-    int amount = 10000000;
+    int amount = 1000000;
     printf("Generating random points...\n");
     Matrix<3, 1>* points = generate_random_points(amount);
     Matrix<3, 1>* buffer = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
