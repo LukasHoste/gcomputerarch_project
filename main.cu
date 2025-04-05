@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <chrono>
+#include "matrix.h"
 #include <curand.h>
 #include <curand_kernel.h>
-#include <math.h>
 
 void save_image_array(uint8_t* image_array, int width, int height, int channels) {
     /*
@@ -46,178 +46,191 @@ void save_black_white_image(uint8_t* image_array, int width, int height) {
 }
 
 
-struct point {
-    float x;
-    float y;
-};
+void setBottomLeftMatrix(Matrix<3,3>* matrix) {
+    const double newData[3][3] = {
+        {0.5, 0, 0},
+        {0, 0.5, 0},
+        {0, 0, 1},
+    };
 
-#define BOTTOM_LEFT_POINT {0.0, 0.0}
-#define BOTTOM_RIGHT_POINT {1.0, 0.0}
-#define TOP_POINT {0.5, 1.0}
+    matrix->setData(newData);
+}
 
-__device__ point get_random_trig_point_gpu(curandState* state) {
+void setBottomRightMatrix(Matrix<3,3>* matrix) {
+    const double newData[3][3] = {
+        {0.5, 0, 0.5},
+        {0, 0.5, 0},
+        {0, 0, 1},
+    };
+
+    matrix->setData(newData);
+}
+
+void setTopMatrix(Matrix<3,3>* matrix) {
+    const double newData[3][3] = {
+        {0.5, 0, 0.25},
+        {0, 0.5, 0.5},
+        {0, 0, 1},
+    };
+
+    matrix->setData(newData);
+}
+
+
+Matrix<3,3>* get_random_trig_point(Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
+    int random = rand() % 3;
+    if (random < 1) {
+        return bottomLeftMatrix;
+    } else if (random < 2) {
+        return bottomRightMatrix;
+    } else {
+        return topMatrix;
+    }
+}
+
+__device__ Matrix<3,3>* get_random_trig_point_gpu(curandState* state, Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
     float random = curand_uniform(state);
     if (random < 1.0f / 3.0f) {
-        return BOTTOM_LEFT_POINT;
+        return bottomLeftMatrix;
     } else if (random < 2.0f / 3.0f) {
-        return BOTTOM_RIGHT_POINT;
+        return bottomRightMatrix;
     } else {
-        return TOP_POINT;
-    }
-}
-
-point get_random_trig_point() {
-    int random = rand() % 3;
-    if (random == 0) {
-        return BOTTOM_LEFT_POINT;
-    } else if (random == 1) {
-        return BOTTOM_RIGHT_POINT;
-    } else {
-        return TOP_POINT;
+        return topMatrix;
     }
 }
 
 
-void create_triangle(point* points, int amount, int iterations) {
-    // the triangle is on a one by one grid
 
+void create_triangle(Matrix<3, 1>* points, int amount, int iterations,Matrix<3, 1>* buffer ,Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
+    // the tirnalgle is on a one by one grid
     for (int j = 0; j < iterations; j++) {
         for (int i = 0; i < amount; i++) {
-            point random_trig_point = get_random_trig_point();
-            point* current_point = &points[i];
-            current_point->x = 0.5 * (current_point->x + random_trig_point.x);
-            current_point->y = 0.5 * (current_point->y + random_trig_point.y);
+            Matrix<3, 3>* random_trig_point = get_random_trig_point(bottomLeftMatrix, bottomRightMatrix, topMatrix);
+            Matrix<3,1>* current_point = points + i;
+            Matrix<3,1>* buffer_point = buffer + i;
+            random_trig_point->mult(current_point, buffer_point);
+            *current_point = *buffer_point;
         }
     }
 
 }
 
-point* generate_random_points(int amount) {
-    point* points = (point*)malloc(amount * sizeof(point));
+Matrix<3, 1>* generate_random_points(int amount) {
+    Matrix<3, 1>* points = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
     for (int i = 0; i < amount; i++) {
-        points[i].x = (float)rand() / RAND_MAX;
-        points[i].y = (float)rand() / RAND_MAX;
+        double data[3][1] = {
+            {(double)rand() / RAND_MAX},
+            {(double)rand() / RAND_MAX},
+            {1.0},
+        };
+        points[i].setData(data);
     }
     return points;
 }
 
 
-uint8_t* scale_to_image(point* points, int amount, int width, int height) {
+uint8_t* scale_to_image(Matrix<3, 1>* points, int amount, int width, int height) {
     uint8_t* image_array = (uint8_t*)calloc(width * height, sizeof(uint8_t));
-    // first set all to zero
-    // for (int i = 0; i < width * height; i++) {
-    //     image_array[i] = 0;
-    // }
 
     for (int i = 0; i < amount; i++) {
-        point current_point = points[i];
-        // int x = current_point.x * width;
-        // int y = height - current_point.y * height;
-        int x = fminf(current_point.x * width, width - 1);
-        int y = fminf(height - (current_point.y * height), height - 1);
+        Matrix<3, 1> current_point = points[i];
+        int x = fminf(current_point.at(0, 0) * width, width - 1);
+        int y = fminf(height - current_point.at(1, 0)* height, height - 1);
         image_array[y * width + x] = 255;
     }
     return image_array;
 }
 
-// GPU version
-__global__ void create_triangle_kernel(point* points, int amount, int iterations, int seed) {
+__global__ void create_triangle_gpu_kernel(Matrix<3, 1>* points, int amount, int iterations, Matrix<3, 1>* buffer ,Matrix<3,3> bottomLeftMatrix, Matrix<3,3> bottomRightMatrix, Matrix<3,3> topMatrix, int seed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= amount) return;
+    if (idx >= amount) {
+        return;
+    }
 
     curandState state;
     curand_init(seed + idx, 0, 0, &state);
+    Matrix<3, 3>* random_trig_point;
+    Matrix<3, 1>* original_point = points + idx;
+
+
+
+
+    Matrix<3, 1>* current_point = original_point;
+    Matrix<3, 1>* buffer_point = buffer + idx;
+
+    Matrix<3, 1>* temp = current_point;
 
     for (int j = 0; j < iterations; j++) {
-        // int rand_val = curand(&state) % 3;
-        point random_trig_point = get_random_trig_point_gpu(&state);
-        points[idx].x = 0.5 * (points[idx].x + random_trig_point.x);
-        points[idx].y = 0.5 * (points[idx].y + random_trig_point.y);
+        random_trig_point = get_random_trig_point_gpu(&state, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
+        random_trig_point->mult(current_point, buffer_point);
+        // we move the pointers around instead of copying the data
+        current_point = buffer_point;
+        buffer_point = temp;
+        temp = current_point;
+    }
+    if (iterations % 2 != 0) {
+        // we have a uneven amount of operations done and such, te last result is in the buffer and not in points.
+        // so we copy it over
+        *original_point = *buffer_point;
     }
 }
 
-void create_triangle_gpu(point* points, int amount, int iterations) {
-    point* d_points;
-    cudaMalloc(&d_points, amount * sizeof(point));
-    cudaMemcpy(d_points, points, amount * sizeof(point), cudaMemcpyHostToDevice);
 
+void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , const Matrix<3,3>& bottomLeftMatrix, const Matrix<3,3>& bottomRightMatrix, const Matrix<3,3>& topMatrix) {
+    Matrix<3, 1>* gpu_points;
+    Matrix<3, 1>* gpu_buffer;
+
+    cudaMalloc(&gpu_points, amount * sizeof(Matrix<3, 1>));
+    cudaMalloc(&gpu_buffer, amount * sizeof(Matrix<3, 1>));
+
+    cudaMemcpy(gpu_points, points, amount * sizeof(Matrix<3, 1>), cudaMemcpyHostToDevice);
     int threadsPerBlock = 256;
     int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
-    
-    create_triangle_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_points, amount, iterations, time(NULL));
-    cudaMemcpy(points, d_points, amount * sizeof(point), cudaMemcpyDeviceToHost);
-    
-    cudaFree(d_points);
+
+    create_triangle_gpu_kernel<<<blocksPerGrid, threadsPerBlock>>>(gpu_points, amount, iterations, gpu_buffer, bottomLeftMatrix, bottomRightMatrix, topMatrix, time(NULL));
+    cudaDeviceSynchronize();
+    cudaMemcpy(points, gpu_points, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost);
+    cudaFree(gpu_points);
+    cudaFree(gpu_buffer);
+
 }
 
 
 int main() {
-    // // Define the image dimensions
-    // srand(1000);
-    // int width = 300;
-    // int height = 300;
-    // int image_size = width * height;
+    srand(1000);
+    int width = 500;
+    int height = 500;
+    int image_size = width * height;
     
-    // // Generate random points
-    // int amount = 100000;
-    // point* points = generate_random_points(amount);
-    // create_triangle(points, amount, 1000);
-    // uint8_t* image_array = scale_to_image(points, amount, width, height);
+    // Generate random points
+    int amount = 1000000;
+    printf("Generating random points...\n");
+    Matrix<3, 1>* points = generate_random_points(amount);
+    Matrix<3, 1>* buffer = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
+    Matrix<3,3> bottomLeftMatrix;
+    Matrix<3,3> bottomRightMatrix;
+    Matrix<3,3> topMatrix;
+    setBottomLeftMatrix(&bottomLeftMatrix);
+    setBottomRightMatrix(&bottomRightMatrix);
+    setTopMatrix(&topMatrix);
 
-    // printf("done\n");
-    
-    
-    // // Save the image
-    // save_black_white_image(image_array, width, height);
-    
-    // // Free the memory
-    // free(image_array);
-    // free(points);
-    
-    // return 0;
-
-    // int amount = 100000000;
-    // int iterations = 10000;
-
-    int amount = 100000;
-    int iterations = 1000;
-
-    int width = 200;
-    int height = 200;
-
-    point* points = (point*)malloc(amount * sizeof(point));
-    for (int i = 0; i < amount; i++) {
-        points[i].x = (float)rand() / RAND_MAX;
-        points[i].y = (float)rand() / RAND_MAX;
-    }
-
-    // create_triangle_gpu(points, amount, iterations);
-
-    // printf("GPU computation done!\n");
-
-
-    // timing the GPU VS CPU
-    auto start = std::chrono::high_resolution_clock::now();
-    create_triangle(points, amount, iterations);
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    printf("CPU time: %f\n", elapsed.count());
-
-
-    //GPU
-    start = std::chrono::high_resolution_clock::now();
-    create_triangle_gpu(points, amount, iterations);
-    cudaDeviceSynchronize();
-    end = std::chrono::high_resolution_clock::now();
-    elapsed = end - start;
-    printf("GPU time: %f\n", elapsed.count());
-
-    // scale and save the image
+    printf("done\n");
+    printf("Creating triangle...");
+    //create_triangle(points, amount, 200, buffer, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
+    create_triangle_gpu(points, amount, 10000, bottomLeftMatrix, bottomRightMatrix, topMatrix);
+    printf("done\n");
+    printf("Scaling to image...");
     uint8_t* image_array = scale_to_image(points, amount, width, height);
+    printf("done\n");
+    
+    
+    // Save the image
     save_black_white_image(image_array, width, height);
-
+    
     // Free the memory
-    free(points);
     free(image_array);
+    free(points);
+    free(buffer);
+    
     return 0;
 }

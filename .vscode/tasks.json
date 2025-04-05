@@ -7,7 +7,7 @@
         {
             "label": "build",
             "command": "nvcc",
-            "args": ["-g", "-o", "maintest.exe", "${workspaceFolder}/main.cu"],
+            "args": ["-g", "-o", "maintest.exe", "${workspaceFolder}/main.cu", "${workspaceFolder}/matrix.cu"],
             "group": {
                 "kind": "build",
                 "isDefault": true
