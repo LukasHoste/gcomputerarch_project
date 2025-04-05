@@ -55,6 +55,16 @@ class Matrix {
     }
 
 
+    void print() const {
+        for (int i = 0; i < TRows; i++) {
+            for (int j = 0; j < TCols; j++) {
+                printf("%f ", data[i][j]);
+            }
+            printf("\n");
+        }
+    }
+
+
 };
 
 #endif // MATRIX_H

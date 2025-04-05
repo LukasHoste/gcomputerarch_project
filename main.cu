@@ -77,7 +77,54 @@ void setTopMatrix(Matrix<3,3>* matrix) {
 }
 
 
-Matrix<3,3>* get_random_trig_point(Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
+Matrix<3, 3> create_random_scale_matrix() {
+    Matrix<3, 3> matrix;
+    double data[3][3] = {
+        {(double)rand() / RAND_MAX, 0, 0},
+        {0, (double)rand() / RAND_MAX, 0},
+        {0, 0, 1},
+    };
+    matrix.setData(data);
+    return matrix;
+}
+Matrix<3, 3> create_random_translation_matrix() {
+    Matrix<3, 3> matrix;
+    double data[3][3] = {
+        {1, 0, (double)rand() / RAND_MAX},
+        {0, 1, (double)rand() / RAND_MAX},
+        {0, 0, 1},
+    };
+    matrix.setData(data);
+    return matrix;
+}
+
+Matrix<3, 3> create_random_rotation_matrix() {
+    Matrix<3, 3> matrix;
+    double angle = ((double)rand() / RAND_MAX) * 2 * M_PI;
+    double data[3][3] = {
+        {cos(angle), -sin(angle), 0},
+        {sin(angle), cos(angle), 0},
+        {0, 0, 1},
+    };
+    matrix.setData(data);
+    return matrix;
+}
+Matrix<3, 3> create_random_shear_matrix() {
+    Matrix<3, 3> matrix;
+    double data[3][3] = {
+        {1, (double)rand() / RAND_MAX, 0},
+        {(double)rand() / RAND_MAX, 1, 0},
+        {0, 0, 1},
+    };
+    matrix.setData(data);
+    return matrix;
+}
+Matrix<3, 3> create_random_affine_matrix() {
+    return create_random_scale_matrix() * create_random_rotation_matrix()* create_random_translation_matrix();
+}
+
+
+Matrix<3,3>* get_random_point(Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
     int random = rand() % 3;
     if (random < 1) {
         return bottomLeftMatrix;
@@ -88,7 +135,7 @@ Matrix<3,3>* get_random_trig_point(Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* b
     }
 }
 
-__device__ Matrix<3,3>* get_random_trig_point_gpu(curandState* state, Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
+__device__ Matrix<3,3>* get_random_point_gpu(curandState* state, Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
     float random = curand_uniform(state);
     if (random < 1.0f / 3.0f) {
         return bottomLeftMatrix;
@@ -105,7 +152,7 @@ void create_triangle(Matrix<3, 1>* points, int amount, int iterations,Matrix<3, 
     // the tirnalgle is on a one by one grid
     for (int j = 0; j < iterations; j++) {
         for (int i = 0; i < amount; i++) {
-            Matrix<3, 3>* random_trig_point = get_random_trig_point(bottomLeftMatrix, bottomRightMatrix, topMatrix);
+            Matrix<3, 3>* random_trig_point = get_random_point(bottomLeftMatrix, bottomRightMatrix, topMatrix);
             Matrix<3,1>* current_point = points + i;
             Matrix<3,1>* buffer_point = buffer + i;
             random_trig_point->mult(current_point, buffer_point);
@@ -128,6 +175,35 @@ Matrix<3, 1>* generate_random_points(int amount) {
     return points;
 }
 
+// between 0 and one in all directions
+void rescale_points(Matrix<3, 1>* points, int amount) {
+    double min_x = 1;
+    double min_y = 1;
+    double max_x = 0;
+    double max_y = 0;
+    for (int i = 0; i < amount; i++) {
+        Matrix<3, 1> current_point = points[i];
+        if (current_point.at(0, 0) < min_x) {
+            min_x = current_point.at(0, 0);
+        }
+        if (current_point.at(1, 0) < min_y) {
+            min_y = current_point.at(1, 0);
+        }
+        if (current_point.at(0, 0) > max_x) {
+            max_x = current_point.at(0, 0);
+        }
+        if (current_point.at(1, 0) > max_y) {
+            max_y = current_point.at(1, 0);
+        }
+    }
+    for (int i = 0; i < amount; i++) {
+        Matrix<3, 1> current_point = points[i];
+        current_point.at(0, 0) = (current_point.at(0, 0) - min_x) / (max_x - min_x);
+        current_point.at(1, 0) = (current_point.at(1, 0) - min_y) / (max_y - min_y);
+        points[i] = current_point;
+    }
+}
+
 
 uint8_t* scale_to_image(Matrix<3, 1>* points, int amount, int width, int height) {
     uint8_t* image_array = (uint8_t*)calloc(width * height, sizeof(uint8_t));
@@ -136,6 +212,12 @@ uint8_t* scale_to_image(Matrix<3, 1>* points, int amount, int width, int height)
         Matrix<3, 1> current_point = points[i];
         int x = fminf(current_point.at(0, 0) * width, width - 1);
         int y = fminf(height - current_point.at(1, 0)* height, height - 1);
+        if (x < 0) {
+            x = 0;
+        }
+        if (y < 0) {
+            y = 0;
+        }
         image_array[y * width + x] = 255;
     }
     return image_array;
@@ -161,7 +243,7 @@ __global__ void create_triangle_gpu_kernel(Matrix<3, 1>* points, int amount, int
     Matrix<3, 1>* temp = current_point;
 
     for (int j = 0; j < iterations; j++) {
-        random_trig_point = get_random_trig_point_gpu(&state, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
+        random_trig_point = get_random_point_gpu(&state, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
         random_trig_point->mult(current_point, buffer_point);
         // we move the pointers around instead of copying the data
         current_point = buffer_point;
@@ -221,7 +303,7 @@ __global__ void create_triangle_gpu_kernel(
     Matrix<3,1>* current_point = input + idx;
     Matrix<3,1>* buffer_point = output + idx;
 
-    random_trig_point = get_random_trig_point_gpu(state, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
+    random_trig_point = get_random_point_gpu(state, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
     random_trig_point->mult(current_point, buffer_point);
 }
 
@@ -271,6 +353,8 @@ void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int 
         cudaMemcpy(save_buffer, output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost);
 
         // Save image
+        rescale_points(save_buffer, amount);
+
         uint8_t* image_array = scale_to_image(save_buffer, amount, width, height);
         char filename[64];
         snprintf(filename, sizeof(filename), "./vid_imgs/frame_%03d.ppm", j);
@@ -301,6 +385,7 @@ void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , cons
     cudaMemcpy(gpu_points, points, amount * sizeof(Matrix<3, 1>), cudaMemcpyHostToDevice);
     int threadsPerBlock = 256;
     int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
+    printf("blocksPerGrid: %d\n", blocksPerGrid);
 
     create_triangle_gpu_kernel<<<blocksPerGrid, threadsPerBlock>>>(gpu_points, amount, iterations, gpu_buffer, bottomLeftMatrix, bottomRightMatrix, topMatrix, time(NULL));
     cudaDeviceSynchronize();
@@ -312,10 +397,17 @@ void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , cons
 
 
 int main() {
-    srand(1000);
+    srand(81);
     int width = 500;
     int height = 500;
     int image_size = width * height;
+
+
+    Matrix<3, 3> randomMatrixOne = create_random_affine_matrix();
+    Matrix<3, 3> randomMatrixTwo = create_random_affine_matrix();
+    Matrix<3, 3> randomMatrixThree = create_random_affine_matrix();
+    randomMatrixOne.print();
+
     
     // Generate random points
     int amount = 1000000;
@@ -329,13 +421,19 @@ int main() {
     setBottomRightMatrix(&bottomRightMatrix);
     setTopMatrix(&topMatrix);
 
+
+
     printf("done\n");
     printf("Creating triangle...");
     //create_triangle(points, amount, 200, buffer, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
     // create_triangle_gpu(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix);
-    create_triangle_gpu_with_frames(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix, width, height);
+    create_triangle_gpu_with_frames(points, amount, 200, randomMatrixOne, randomMatrixTwo, randomMatrixThree, width, height);
+    //create_triangle_gpu(points, amount, 1000, randomMatrixOne, randomMatrixTwo, randomMatrixThree);
     printf("done\n");
-    printf("Scaling to image...");
+    printf("Rescaling points...");
+    rescale_points(points, amount);
+    printf("done\n");
+    printf("Creating to image...");
     uint8_t* image_array = scale_to_image(points, amount, width, height);
     printf("done\n");
     
