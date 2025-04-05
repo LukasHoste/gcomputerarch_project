@@ -5,6 +5,8 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
+# define OUR_PI		3.14159265358979323846	/* pi */
+
 __constant__ char global_matrixes_data[3 * sizeof(Matrix<3, 3>)];
 
 void save_image_array(uint8_t* image_array, int width, int height, int channels) {
@@ -102,7 +104,7 @@ Matrix<3, 3> create_random_translation_matrix() {
 
 Matrix<3, 3> create_random_rotation_matrix() {
     Matrix<3, 3> matrix;
-    double angle = ((double)rand() / RAND_MAX) * 2 * M_PI;
+    double angle = ((double)rand() / RAND_MAX) * 2 * OUR_PI;
     double data[3][3] = {
         {cos(angle), -sin(angle), 0},
         {sin(angle), cos(angle), 0},
