@@ -5,8 +5,8 @@ template<size_t TRows, size_t TCols>
 class Matrix {
     public:
     double data[TRows][TCols];
-    const size_t cols = TCols;
-    const size_t rows = TRows;
+    //const size_t cols = TCols;
+    //const size_t rows = TRows;
 
     __device__ __host__ double& at(size_t row, size_t col) {
         return data[row][col];
@@ -29,7 +29,7 @@ class Matrix {
         for (int i = 0; i < TRows; i++) {
             for (int j = 0; j < TColsB; j++) {
                 double sum = 0;
-                for (int k = 0; k < cols; k++) {
+                for (int k = 0; k < TCols; k++) {
                     sum += this->at(i, k) * b->at(k, j);
                 }
                 result->at(i, j) = sum;

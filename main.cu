@@ -208,8 +208,15 @@ void rescale_points(Matrix<3, 1>* points, int amount) {
     }
 }
 
-
 uint8_t* scale_to_image(Matrix<3, 1>* points, int amount, int width, int height) {
+    int pointsPerPixel = amount / (width * height);
+    printf("pointsPerPixel: %d\n", pointsPerPixel);
+    if (pointsPerPixel < 1) {
+        pointsPerPixel = 1;
+    }
+
+
+
     uint8_t* image_array = (uint8_t*)calloc(width * height, sizeof(uint8_t));
 
     for (int i = 0; i < amount; i++) {
@@ -222,43 +229,38 @@ uint8_t* scale_to_image(Matrix<3, 1>* points, int amount, int width, int height)
         if (y < 0) {
             y = 0;
         }
-        image_array[y * width + x] = 255;
+        image_array[y * width + x] = min(255, image_array[y * width + x] + 255 / pointsPerPixel);
     }
     return image_array;
 }
 
 __global__ void create_triangle_gpu_kernel(Matrix<3, 1>* points, int amount, int iterations, Matrix<3, 1>* buffer, int seed) {
     Matrix<3, 3>* global_matrixes = (Matrix<3, 3>*)global_matrixes_data;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= amount) {
-        return;
-    }
+    // striding
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
+        curandState state;
+        curand_init(seed + idx, 0, 0, &state);
+        Matrix<3, 3>* random_trig_point;
+        Matrix<3, 1>* original_point = points + idx;
 
-    curandState state;
-    curand_init(seed + idx, 0, 0, &state);
-    Matrix<3, 3>* random_trig_point;
-    Matrix<3, 1>* original_point = points + idx;
+        Matrix<3, 1>* current_point = original_point;
+        Matrix<3, 1>* buffer_point = buffer + idx;
 
+        Matrix<3, 1>* temp = current_point;
 
-
-
-    Matrix<3, 1>* current_point = original_point;
-    Matrix<3, 1>* buffer_point = buffer + idx;
-
-    Matrix<3, 1>* temp = current_point;
-
-    for (int j = 0; j < iterations; j++) {
-        random_trig_point = get_random_point_gpu(&state, &global_matrixes[0], &global_matrixes[1], &global_matrixes[2]);
-        random_trig_point->mult(current_point, buffer_point);
-        // we move the pointers around instead of copying the data
-        current_point = buffer_point;
-        buffer_point = temp;
-        temp = current_point;
-    }
-    if (iterations % 2 != 0) {
-        // we have a uneven amount of operations done and such, te last result is in the buffer and not in points.
-        // so we copy it over
-        *original_point = *buffer_point;
+        for (int j = 0; j < iterations; j++) {
+            random_trig_point = get_random_point_gpu(&state, &global_matrixes[0], &global_matrixes[1], &global_matrixes[2]);
+            random_trig_point->mult(current_point, buffer_point);
+            // we move the pointers around instead of copying the data
+            current_point = buffer_point;
+            buffer_point = temp;
+            temp = current_point;
+        }
+        if (iterations % 2 != 0) {
+            // we have a uneven amount of operations done and such, te last result is in the buffer and not in points.
+            // so we copy it over
+            *original_point = *buffer_point;
+        }
     }
 }
 
@@ -284,9 +286,9 @@ void save_black_white_image_with_name(uint8_t* image_array, int width, int heigh
 
 // RNG Setup Kernel (now fixed)
 __global__ void setup_rng_kernel(curandState* states, int amount, int seed) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= amount) return;
-    curand_init(seed, idx, 0, &states[idx]);
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
+        curand_init(seed, idx, 0, &states[idx]);
+    }
 }
 
 // GPU Kernel using persistent RNG states
@@ -297,17 +299,15 @@ __global__ void create_triangle_gpu_kernel(
     curandState* rng_states)
 {
     Matrix<3, 3>* global_matrixes = (Matrix<3, 3>*)global_matrixes_data;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= amount) return;
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
+        curandState* state = &rng_states[idx];
+        Matrix<3, 3>* random_trig_point;
+        Matrix<3, 1>* current_point = input + idx;
+        Matrix<3, 1>* buffer_point = output + idx;
 
-    curandState* state = &rng_states[idx];
-
-    Matrix<3,3>* random_trig_point;
-    Matrix<3,1>* current_point = input + idx;
-    Matrix<3,1>* buffer_point = output + idx;
-
-    random_trig_point = get_random_point_gpu(state, &global_matrixes[0], &global_matrixes[1], &global_matrixes[2]);
-    random_trig_point->mult(current_point, buffer_point);
+        random_trig_point = get_random_point_gpu(state, &global_matrixes[0], &global_matrixes[1], &global_matrixes[2]);
+        random_trig_point->mult(current_point, buffer_point);
+    }
 }
 
 // Main function with fixed RNG setup
@@ -317,42 +317,50 @@ void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int 
     const Matrix<3,3>& topMatrix,
     int width, int height)
 {
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+
+
     // Allocate GPU memory
     Matrix<3, 1>* gpu_a;
     Matrix<3, 1>* gpu_b;
-    cudaMalloc(&gpu_a, amount * sizeof(Matrix<3, 1>));
-    cudaMalloc(&gpu_b, amount * sizeof(Matrix<3, 1>));
+    cudaMallocAsync(&gpu_a, amount * sizeof(Matrix<3, 1>), stream);
+    cudaMallocAsync(&gpu_b, amount * sizeof(Matrix<3, 1>), stream);
 
     // Copy initial points
-    cudaMemcpy(gpu_a, host_points, amount * sizeof(Matrix<3, 1>), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(gpu_a, host_points, amount * sizeof(Matrix<3, 1>), cudaMemcpyHostToDevice, stream);
 
     // Allocate and setup RNG states
     curandState* d_states;
-    cudaMalloc(&d_states, amount * sizeof(curandState));
+    cudaMallocAsync(&d_states, amount * sizeof(curandState), stream);
 
     int threadsPerBlock = 256;
     int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
+    blocksPerGrid = min(blocksPerGrid, 65535); // Limit to 65535 blocks
 
     // ✅ Pass `amount` to RNG setup kernel
-    setup_rng_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_states, amount, time(NULL));
-    cudaDeviceSynchronize();
+    setup_rng_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(d_states, amount, time(NULL));
+    //cudaDeviceSynchronize();
 
     // Buffer for saving frames
     Matrix<3, 1>* save_buffer = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
     bool using_a_as_input = true;
 
+    // changed ordering so that the gpu is busy when the cpu is busy
     for (int j = 0; j < iterations; j++) {
         Matrix<3, 1>* input = using_a_as_input ? gpu_a : gpu_b;
         Matrix<3, 1>* output = using_a_as_input ? gpu_b : gpu_a;
 
-        create_triangle_gpu_kernel<<<blocksPerGrid, threadsPerBlock>>>(
+
+
+        create_triangle_gpu_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
             input, amount, output,
             d_states
         );
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
 
         // Copy for frame
-        cudaMemcpy(save_buffer, output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost);
+        cudaMemcpyAsync(save_buffer, output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost, stream);
 
         // Save image
         rescale_points(save_buffer, amount);
@@ -368,12 +376,14 @@ void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int 
 
     // Copy final result
     Matrix<3, 1>* final_output = using_a_as_input ? gpu_b : gpu_a;
-    cudaMemcpy(host_points, final_output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(host_points, final_output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost, stream);
 
     // Cleanup
-    cudaFree(gpu_a);
-    cudaFree(gpu_b);
-    cudaFree(d_states);
+    cudaFreeAsync(gpu_a, stream);
+    cudaFreeAsync(gpu_b, stream);
+    cudaFreeAsync(d_states, stream);
+    cudaStreamSynchronize(stream);
+    cudaStreamDestroy(stream);
     free(save_buffer);
 }
 
@@ -385,8 +395,13 @@ void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , cons
     cudaMalloc(&gpu_buffer, amount * sizeof(Matrix<3, 1>));
 
     cudaMemcpy(gpu_points, points, amount * sizeof(Matrix<3, 1>), cudaMemcpyHostToDevice);
+    unsigned long long kb = amount * sizeof(Matrix<3, 1>) / 1024;
+    unsigned long long mb = kb / 1024;
+    printf("Size of copy: %llu KB\n", kb);
+    printf("Size of copy: %llu MB\n", mb);
     int threadsPerBlock = 256;
     int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
+    blocksPerGrid = min(blocksPerGrid, 65535); // Limit to 65535 blocks
     printf("blocksPerGrid: %d\n", blocksPerGrid);
 
     create_triangle_gpu_kernel<<<blocksPerGrid, threadsPerBlock>>>(gpu_points, amount, iterations, gpu_buffer, time(NULL));
@@ -400,8 +415,8 @@ void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , cons
 
 int main() {
     srand(81);
-    int width = 500;
-    int height = 500;
+    int width = 1920;
+    int height = 1920;
     int image_size = width * height;
 
 
@@ -413,7 +428,7 @@ int main() {
     cudaMemcpyToSymbol(global_matrixes_data, &matrixesArray, sizeof(Matrix<3, 3>)*3);
     
     // Generate random points
-    int amount = 1000000;
+    int amount = 50000000;
     printf("Generating random points...\n");
     Matrix<3, 1>* points = generate_random_points(amount);
     Matrix<3, 1>* buffer = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
@@ -431,7 +446,7 @@ int main() {
     //create_triangle(points, amount, 200, buffer, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
     // create_triangle_gpu(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix);
     create_triangle_gpu_with_frames(points, amount, 200, randomMatrixOne, randomMatrixTwo, randomMatrixThree, width, height);
-    //create_triangle_gpu(points, amount, 1000, randomMatrixOne, randomMatrixTwo, randomMatrixThree);
+    //create_triangle_gpu(points, amount, 200, randomMatrixOne, randomMatrixTwo, randomMatrixThree);
     printf("done\n");
     printf("Rescaling points...");
     rescale_points(points, amount);
