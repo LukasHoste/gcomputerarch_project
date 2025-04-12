@@ -316,17 +316,38 @@ __global__ void create_image_floaty_gpu_kernel(Matrix<3, 1>* points, int amount,
     // striding
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
         Matrix<3, 1>* current_point = points + idx;
-        float x_f = ((float) current_point->at(0, 0) - *min_x) / (*max_x - *min_x);
-        float y_f = ((float) current_point->at(1, 0) - *min_y) / (*max_y - *min_y);
-        int x = fminf(x_f * width, width - 1);
-        int y = fminf(height - y_f * height, height - 1);
-        if (x < 0) {
-            x = 0;
+        float x_f_norm = ((float) current_point->at(0, 0) - *min_x) / (*max_x - *min_x);
+        float y_f_nrom = ((float) current_point->at(1, 0) - *min_y) / (*max_y - *min_y);
+        float x_f = fminf(x_f_norm * width, width - 1);
+        float y_f = fminf(height - y_f_nrom * height, height - 1);
+        if (x_f < 0) {
+            x_f = 0;
         }
-        if (y < 0) {
-            y = 0;
+        if (y_f < 0) {
+            y_f = 0;
         }
-        atomicAdd(&image_data[y * width + x], 255.0f);
+
+        int x_i = (int)x_f;
+        int y_i = (int)y_f;
+
+        float dx = x_f - x_i;
+        float dy = y_f - y_i;
+
+        float w1 = (1.0f - dx) * (1.0f - dy);
+        float w2 = dx * (1.0f - dy);
+        float w3 = (1.0f - dx) * dy;
+        float w4 = dx * dy;
+
+        int x0 = x_i;
+        int y0 = y_i;
+        int x1 = min(x_i + 1, width - 1);
+        int y1 = min(y_i + 1, height - 1);
+        float mult = 5;
+        atomicAdd(&image_data[y0 * width + x0], w1 * mult);
+        atomicAdd(&image_data[y0 * width + x1], w2 * mult);
+        atomicAdd(&image_data[y1 * width + x0], w3 * mult);
+        atomicAdd(&image_data[y1 * width + x1], w4 * mult);
+
     }
 }
 
