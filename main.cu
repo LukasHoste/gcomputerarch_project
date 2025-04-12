@@ -310,6 +310,88 @@ __global__ void create_triangle_gpu_kernel(
     }
 }
 
+__global__ void create_image_floaty_gpu_kernel(Matrix<3, 1>* points, int amount, float* image_data, int width, int height,
+    float* min_x, float* min_y, float* max_x, float* max_y
+) {
+    // striding
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
+        Matrix<3, 1>* current_point = points + idx;
+        float x_f = ((float) current_point->at(0, 0) - *min_x) / (*max_x - *min_x);
+        float y_f = ((float) current_point->at(1, 0) - *min_y) / (*max_y - *min_y);
+        int x = fminf(x_f * width, width - 1);
+        int y = fminf(height - y_f * height, height - 1);
+        if (x < 0) {
+            x = 0;
+        }
+        if (y < 0) {
+            y = 0;
+        }
+        atomicAdd(&image_data[y * width + x], 255.0f);
+    }
+}
+
+__global__ void float_to_uint8_kernel(float* input, uint8_t* output, unsigned long size) {
+    for (unsigned long idx = blockIdx.x * blockDim.x + threadIdx.x; idx < size; idx += blockDim.x * gridDim.x) {
+        output[idx] = (uint8_t)fminf(input[idx], 255.0f);
+        //output[idx] = 255;
+    }
+}
+
+__device__ float fatomicMin(float *addr, float value)
+
+{
+
+        float old = *addr, assumed;
+
+        if(old <= value) return old;
+
+        do
+
+        {
+
+                assumed = old;
+
+                old = atomicCAS((unsigned int*)addr, __float_as_int(assumed), __float_as_int(value));
+
+        }while(old!=assumed);
+
+        return old;
+
+}
+
+__device__ float fatomicMax(float *addr, float value)
+
+{
+
+        float old = *addr, assumed;
+
+        if(old >= value) return old;
+
+        do
+
+        {
+
+                assumed = old;
+
+                old = atomicCAS((unsigned int*)addr, __float_as_int(assumed), __float_as_int(value));
+
+        }while(old!=assumed);
+
+        return old;
+
+}
+
+
+__global__ void get_scaling_params_kernel(Matrix<3, 1>* points, int amount, float* min_x, float* min_y, float* max_x, float* max_y) {
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
+        Matrix<3, 1>* current_point = points + idx;
+        fatomicMin(min_x, (float) current_point->at(0, 0));
+        fatomicMin(min_y, (float) current_point->at(1, 0));
+        fatomicMax(max_x, (float) current_point->at(0, 0));
+        fatomicMax(max_y, (float) current_point->at(1, 0));
+    }
+}
+
 // Main function with fixed RNG setup
 void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int iterations,
     const Matrix<3,3>& bottomLeftMatrix,
@@ -324,6 +406,7 @@ void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int 
     // Allocate GPU memory
     Matrix<3, 1>* gpu_a;
     Matrix<3, 1>* gpu_b;
+
     cudaMallocAsync(&gpu_a, amount * sizeof(Matrix<3, 1>), stream);
     cudaMallocAsync(&gpu_b, amount * sizeof(Matrix<3, 1>), stream);
 
@@ -342,8 +425,24 @@ void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int 
     setup_rng_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(d_states, amount, time(NULL));
     //cudaDeviceSynchronize();
 
-    // Buffer for saving frames
-    Matrix<3, 1>* save_buffer = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
+    float* gpu_floaty_save_buffer = nullptr;
+    cudaMallocAsync(&gpu_floaty_save_buffer, width * height * sizeof(float), stream);
+    cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float), stream);
+
+    uint8_t* gpu_save_buffer = nullptr;
+    cudaMallocAsync(&gpu_save_buffer, width * height * sizeof(uint8_t), stream);
+    cudaMemsetAsync(gpu_save_buffer, 0, width * height * sizeof(uint8_t), stream);
+
+
+    float* scaling_data = nullptr;
+    cudaMallocAsync(&scaling_data, 4 * sizeof(float), stream);
+    float* min_x = scaling_data;
+    float* min_y = scaling_data + 1;
+    float* max_x = scaling_data + 2;
+    float* max_y = scaling_data + 3;
+
+    uint8_t* save_buffer = (uint8_t*)malloc(width * height * sizeof(uint8_t));
+
     bool using_a_as_input = true;
 
     // changed ordering so that the gpu is busy when the cpu is busy
@@ -358,18 +457,35 @@ void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int 
             d_states
         );
         //cudaDeviceSynchronize();
+        cudaMemsetAsync(min_x, 1, sizeof(float), stream);
+        cudaMemsetAsync(min_y, 1, sizeof(float), stream);
+        cudaMemsetAsync(max_x, 0, sizeof(float), stream);
+        cudaMemsetAsync(max_y, 0, sizeof(float), stream);
+        get_scaling_params_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+            output, amount, min_x, min_y, max_x, max_y
+        );
+        create_image_floaty_gpu_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+            output, amount, gpu_floaty_save_buffer, width, height,
+            min_x, min_y, max_x, max_y
+        );
+
+        float_to_uint8_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+            gpu_floaty_save_buffer, gpu_save_buffer, width * height
+        );
+        cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float), stream);
+
 
         // Copy for frame
-        cudaMemcpyAsync(save_buffer, output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(save_buffer, gpu_save_buffer, width * height * sizeof(uint8_t), cudaMemcpyDeviceToHost, stream);
 
         // Save image
-        rescale_points(save_buffer, amount);
+        //rescale_points(save_buffer, amount);
 
-        uint8_t* image_array = scale_to_image(save_buffer, amount, width, height);
+        //uint8_t* image_array = scale_to_image(save_buffer, amount, width, height);
         char filename[64];
         snprintf(filename, sizeof(filename), "./vid_imgs/frame_%03d.ppm", j);
-        save_black_white_image_with_name(image_array, width, height, filename);
-        free(image_array);
+        save_black_white_image_with_name(save_buffer, width, height, filename);
+        //free(image_array);
 
         using_a_as_input = !using_a_as_input;
     }
@@ -382,6 +498,9 @@ void create_triangle_gpu_with_frames(Matrix<3, 1>* host_points, int amount, int 
     cudaFreeAsync(gpu_a, stream);
     cudaFreeAsync(gpu_b, stream);
     cudaFreeAsync(d_states, stream);
+    cudaFreeAsync(gpu_floaty_save_buffer, stream);
+    cudaFreeAsync(gpu_save_buffer, stream);
+    cudaFreeAsync(scaling_data, stream);
     cudaStreamSynchronize(stream);
     cudaStreamDestroy(stream);
     free(save_buffer);
