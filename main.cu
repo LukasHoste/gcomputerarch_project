@@ -79,17 +79,35 @@ Matrix<3, 3> create_random_darkening_matrix() {
     return matrix;
 }
 
-// random color shift
-Matrix<3, 3> create_random_color_shift_matrix() {
+// Generates a small random double between -maxChange and +maxChange
+double random_small_change(double maxChange = 0.1) {
+    return ((double)rand() / RAND_MAX) * 2 * maxChange - maxChange;
+}
+
+// random decrease or increase of R, G, B with smaller range
+Matrix<3, 3> create_random_decrease_increase_matrix() {
     Matrix<3, 3> matrix;
     double data[3][3] = {
-        {0, (double)rand() / RAND_MAX, 0},
-        {(double)rand() / RAND_MAX, 0, 0},
-        {0, 0, 1}
+        {1 + random_small_change(0.5), 0, 0},
+        {0, 1 + random_small_change(0.5), 0},
+        {0, 0, 1 + random_small_change(0.5)}
     };
     matrix.setData(data);
     return matrix;
 }
+
+// random color shift matrix e.g. R->G, G->B, B->R or R->B, G->R, B->G
+Matrix<3, 3> create_color_shift_matrix() {
+    Matrix<3, 3> matrix;
+    double data[3][3] = {
+        {0, 0.5, 0},
+        {0, 0, 0.5},
+        {0.5, 0, 0}
+    };
+    matrix.setData(data);
+    return matrix;
+}
+
 
 // lighten color
 Matrix<3, 3> create_random_lighten_matrix() {
@@ -98,6 +116,24 @@ Matrix<3, 3> create_random_lighten_matrix() {
         {1 + (double)rand() / RAND_MAX, 0, 0},
         {0, 1 + (double)rand() / RAND_MAX, 0},
         {0, 0, 1 + (double)rand() / RAND_MAX}
+    };
+    matrix.setData(data);
+    return matrix;
+}
+
+// random tone matrix
+// like this but fully random
+// double col3[3][3] = {
+    //     {0.393, 0.769, 0.189},
+    //     {0.349, 0.686, 0.168},
+    //     {0.272, 0.534, 0.131}
+    // };
+Matrix<3, 3> create_random_tone_matrix() {
+    Matrix<3, 3> matrix;
+    double data[3][3] = {
+        {0.393 + (double)rand() / RAND_MAX, 0.769 + (double)rand() / RAND_MAX, 0.189 + (double)rand() / RAND_MAX},
+        {0.349 + (double)rand() / RAND_MAX, 0.686 + (double)rand() / RAND_MAX, 0.168 + (double)rand() / RAND_MAX},
+        {0.272 + (double)rand() / RAND_MAX, 0.534 + (double)rand() / RAND_MAX, 0.131 + (double)rand() / RAND_MAX}
     };
     matrix.setData(data);
     return matrix;
@@ -141,7 +177,7 @@ Matrix<3, 3> create_random_affine_matrix() {
 }
 
 Matrix<3, 3> create_random_affine_matrix_color() {
-    return create_random_color_shift_matrix();
+    return create_random_decrease_increase_matrix();
 }
 
 // Kernel for RNG setup
@@ -347,34 +383,28 @@ int main() {
     // };
     // pos_matrices[2].setData(pos3);
 
-    Matrix<3, 3> random_color_matrix_one = create_random_affine_matrix_color();
-    Matrix<3, 3> random_color_matrix_two = create_random_affine_matrix_color();
-    Matrix<3, 3> random_color_matrix_three = create_random_affine_matrix_color();
+    // Matrix<3, 3> random_color_matrix_one = create_random_affine_matrix_color();
+    // Matrix<3, 3> random_color_matrix_two = create_random_affine_matrix_color();
+    // Matrix<3, 3> random_color_matrix_three = create_random_affine_matrix_color();
 
-    // Define color transformations
-    Matrix<3, 3> col_matrices[3] = {
-        random_color_matrix_one,
-        random_color_matrix_two,
-        random_color_matrix_three
-    };
+    // // Define color transformations
+    // Matrix<3, 3> col_matrices[3] = {
+    //     random_color_matrix_one,
+    //     random_color_matrix_two,
+    //     random_color_matrix_three
+    // };
 
-    // Matrix<3, 3> col_matrices[3];
+    Matrix<3, 3> col_matrices[3];
     
-    // // Color matrix 1 (Increase red, decrease green)
-    // double col1[3][3] = {
-    //     {1.2, 0, 0},
-    //     {0, 0.8, 0},
-    //     {0, 0, 1}
-    // };
-    // col_matrices[0].setData(col1);
+    // Color matrix 1 (Increase red, decrease green)
+    double col1[3][3] = {
+        {1, 0, 0},
+        {0, 1, 0},
+        {0, 0, 1}
+    };
+    col_matrices[0].setData(col1);
 
-    // // Color matrix 2 (Shift colors: R->G, G->B, B->R)
-    // double col2[3][3] = {
-    //     {0, 1, 0},
-    //     {0, 0, 1},
-    //     {1, 0, 0}
-    // };
-    // col_matrices[1].setData(col2);
+    col_matrices[1] = create_color_shift_matrix();
 
     // // Color matrix 3 (Sepia tone)
     // double col3[3][3] = {
@@ -383,6 +413,7 @@ int main() {
     //     {0.272, 0.534, 0.131}
     // };
     // col_matrices[2].setData(col3);
+    col_matrices[2] = create_random_affine_matrix_color();
 
     // Combine matrices for constant memory
     Matrix<3, 3> combined_matrices[6];
