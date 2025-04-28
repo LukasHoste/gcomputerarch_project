@@ -560,8 +560,8 @@ int main() {
     // 4321
     stablerand_init(&stable_random, 7878778);
     //srand(4321);
-    int width = 1920;
-    int height = 1920;
+    int width = 1000;
+    int height = 1000;
     int image_size = width * height;
 
 
@@ -573,7 +573,7 @@ int main() {
     cudaMemcpyToSymbol(global_matrixes_data, &matrixesArray, sizeof(Matrix<3, 3>)*3);
     
     // Generate random points
-    int amount = 50000000;
+    int amount = 40000000;
     printf("Generating random points...\n");
     Matrix<3, 1>* points = generate_random_points(amount);
     Matrix<3, 1>* buffer = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
