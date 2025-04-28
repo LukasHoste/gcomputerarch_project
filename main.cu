@@ -4,8 +4,11 @@
 #include "matrix.h"
 #include <curand.h>
 #include <curand_kernel.h>
+#include "stable_random.h"
 
 # define OUR_PI		3.14159265358979323846	/* pi */
+StableRandom stable_random;
+
 
 __constant__ char global_matrixes_data[3 * sizeof(Matrix<3, 3>)];
 
@@ -84,8 +87,8 @@ void setTopMatrix(Matrix<3,3>* matrix) {
 Matrix<3, 3> create_random_scale_matrix() {
     Matrix<3, 3> matrix;
     double data[3][3] = {
-        {(double)rand() / RAND_MAX, 0, 0},
-        {0, (double)rand() / RAND_MAX, 0},
+        {(double)stablerand_next(&stable_random), 0, 0},
+        {0, (double)stablerand_next(&stable_random), 0},
         {0, 0, 1},
     };
     matrix.setData(data);
@@ -94,8 +97,8 @@ Matrix<3, 3> create_random_scale_matrix() {
 Matrix<3, 3> create_random_translation_matrix() {
     Matrix<3, 3> matrix;
     double data[3][3] = {
-        {1, 0, (double)rand() / RAND_MAX},
-        {0, 1, (double)rand() / RAND_MAX},
+        {1, 0, stablerand_next(&stable_random)},
+        {0, 1, stablerand_next(&stable_random)},
         {0, 0, 1},
     };
     matrix.setData(data);
@@ -104,7 +107,7 @@ Matrix<3, 3> create_random_translation_matrix() {
 
 Matrix<3, 3> create_random_rotation_matrix() {
     Matrix<3, 3> matrix;
-    double angle = ((double)rand() / RAND_MAX) * 2 * OUR_PI;
+    double angle = ((double)stablerand_next(&stable_random)) * 2 * OUR_PI;
     double data[3][3] = {
         {cos(angle), -sin(angle), 0},
         {sin(angle), cos(angle), 0},
@@ -116,8 +119,8 @@ Matrix<3, 3> create_random_rotation_matrix() {
 Matrix<3, 3> create_random_shear_matrix() {
     Matrix<3, 3> matrix;
     double data[3][3] = {
-        {1, (double)rand() / RAND_MAX, 0},
-        {(double)rand() / RAND_MAX, 1, 0},
+        {1, (double)stablerand_next(&stable_random), 0},
+        {(double)stablerand_next(&stable_random), 1, 0},
         {0, 0, 1},
     };
     matrix.setData(data);
@@ -129,7 +132,7 @@ Matrix<3, 3> create_random_affine_matrix() {
 
 
 Matrix<3,3>* get_random_point(Matrix<3,3>* bottomLeftMatrix, Matrix<3,3>* bottomRightMatrix, Matrix<3,3>* topMatrix) {
-    int random = rand() % 3;
+    int random = (int)floor(stablerand_next(&stable_random) * 81) % 3;
     if (random < 1) {
         return bottomLeftMatrix;
     } else if (random < 2) {
@@ -170,8 +173,8 @@ Matrix<3, 1>* generate_random_points(int amount) {
     Matrix<3, 1>* points = (Matrix<3, 1>*)malloc(amount * sizeof(Matrix<3, 1>));
     for (int i = 0; i < amount; i++) {
         double data[3][1] = {
-            {(double)rand() / RAND_MAX},
-            {(double)rand() / RAND_MAX},
+            {(double)stablerand_next(&stable_random)},
+            {(double)stablerand_next(&stable_random)},
             {1.0},
         };
         points[i].setData(data);
@@ -554,7 +557,9 @@ void create_triangle_gpu(Matrix<3, 1>* points, int amount, int iterations , cons
 
 
 int main() {
-    srand(81);
+    // 4321
+    stablerand_init(&stable_random, 7878778);
+    //srand(4321);
     int width = 1920;
     int height = 1920;
     int image_size = width * height;
