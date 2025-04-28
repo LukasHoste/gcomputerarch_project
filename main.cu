@@ -5,6 +5,8 @@
 #include <curand.h>
 #include <curand_kernel.h>
 #include <algorithm>
+#include <random>
+#include <array>
 
 #define OUR_PI 3.14159265358979323846
 #define WIDTH 1920
@@ -97,15 +99,55 @@ Matrix<3, 3> create_random_decrease_increase_matrix() {
 }
 
 // random color shift matrix e.g. R->G, G->B, B->R or R->B, G->R, B->G
-Matrix<3, 3> create_color_shift_matrix() {
+Matrix<3, 3> create_color_shift_matrix_1() {
     Matrix<3, 3> matrix;
     double data[3][3] = {
-        {0, 0.5, 0},
-        {0, 0, 0.5},
-        {0.5, 0, 0}
+        {0, 0.8, 0},
+        {0, 0, 0.8},
+        {0.8, 0, 0}
     };
     matrix.setData(data);
     return matrix;
+}
+
+Matrix<3, 3> create_color_shift_matrix_2() {
+    Matrix<3, 3> matrix;
+    double data[3][3] = {
+        {0, 0, 0.8},
+        {0, 0.8, 0},
+        {0.8, 0, 0}
+    };
+    matrix.setData(data);
+    return matrix;
+}
+
+// assume Matrix<3,3> has a setData(double[3][3]) member
+Matrix<3, 3> create_random_color_shift(bool excludeIdentity = true) {
+    // permutation array: index = destination channel 0=R,1=G,2=B
+    // value = source channel to map from
+    std::array<int,3> perm = {0, 1, 2};
+    
+    // random engine
+    static std::random_device rd;
+    static std::mt19937       gen(rd());
+    
+    // optionally avoid the identity mapping {0,1,2}
+    do {
+        std::shuffle(perm.begin(), perm.end(), gen);
+    } while (excludeIdentity && perm == std::array<int,3>{0,1,2});
+    
+    // build the scaled permutation matrix
+    double data[3][3] = {{0}};
+    for (int dst = 0; dst < 3; ++dst) {
+        int src = perm[dst];
+        // random scale between 0 and 2
+        double scale = ((double)rand() / RAND_MAX) * 2;
+        data[dst][src] = scale;
+    }
+    
+    Matrix<3,3> M;
+    M.setData(data);
+    return M;
 }
 
 
@@ -177,7 +219,7 @@ Matrix<3, 3> create_random_affine_matrix() {
 }
 
 Matrix<3, 3> create_random_affine_matrix_color() {
-    return create_random_decrease_increase_matrix();
+    return create_random_decrease_increase_matrix() * create_random_color_shift();
 }
 
 // Kernel for RNG setup
@@ -402,9 +444,9 @@ int main() {
         {0, 1, 0},
         {0, 0, 1}
     };
-    col_matrices[0].setData(col1);
+    col_matrices[0] = create_random_affine_matrix_color();
 
-    col_matrices[1] = create_color_shift_matrix();
+    col_matrices[1] = create_random_affine_matrix_color();
 
     // // Color matrix 3 (Sepia tone)
     // double col3[3][3] = {
@@ -413,6 +455,9 @@ int main() {
     //     {0.272, 0.534, 0.131}
     // };
     // col_matrices[2].setData(col3);
+    // col_matrices[2] = create_random_affine_matrix_color();
+
+    // Color matrix 1 (Increase red, decrease green)
     col_matrices[2] = create_random_affine_matrix_color();
 
     // Combine matrices for constant memory
