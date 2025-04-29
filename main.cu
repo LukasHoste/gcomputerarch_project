@@ -452,13 +452,20 @@ __global__ void setup_rng_kernel(curandState* states, int amount, int seed) {
 }
 
 __global__ void create_image_floaty_gpu_kernel(ColoredPoint* points, int amount, float* image_data, int width, int height,
-    float* min_x, float* min_y, float* max_x, float* max_y
+    float* min_x, float* min_y, float* max_x, float* max_y,
+    float* min_r, float* min_g, float* min_b, float* max_r, float* max_g, float* max_b
 ) {
     // striding
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
         ColoredPoint* current_point = points + idx;
         float x_f_norm = ((float) current_point->pos.at(0, 0) - *min_x) / (*max_x - *min_x);
         float y_f_nrom = ((float) current_point->pos.at(1, 0) - *min_y) / (*max_y - *min_y);
+
+        float r_f_norm = ((float) current_point->color.at(0, 0) - *min_r) / (*max_r - *min_r);
+        float g_f_norm = ((float) current_point->color.at(1, 0) - *min_g) / (*max_g - *min_g);
+        float b_f_norm = ((float) current_point->color.at(2, 0) - *min_b) / (*max_b - *min_b);
+
+
         float x_f = fminf(x_f_norm * width, width - 1);
         float y_f = fminf(height - y_f_nrom * height, height - 1);
         if (x_f < 0) {
@@ -483,7 +490,7 @@ __global__ void create_image_floaty_gpu_kernel(ColoredPoint* points, int amount,
         int y0 = y_i;
         int x1 = min(x_i + 1, width - 1);
         int y1 = min(y_i + 1, height - 1);
-        float mult = 5;
+        float mult = 10;
 
         uint firstIndexR = (y0 * width + x0) * 3;
         uint firstIndexG = firstIndexR + 1;
@@ -501,13 +508,13 @@ __global__ void create_image_floaty_gpu_kernel(ColoredPoint* points, int amount,
         uint fourthIndexG = fourthIndexR + 1;
         uint fourthIndexB = fourthIndexG + 1;
 
-        double rValue = current_point->color.at(0, 0);
-        double gValue = current_point->color.at(1, 0);
-        double bValue = current_point->color.at(2, 0);
+        float rValue = r_f_norm;
+        float gValue = g_f_norm;
+        float bValue = b_f_norm;
 
-        rValue = 1;
-        gValue = 1;
-        bValue = 1;
+        //rValue = 1;
+        //gValue = 1;
+        //bValue = 1;
         //w1 = 1;
         //w2 = 0;
         //w3 = 0;
@@ -586,13 +593,21 @@ __device__ float fatomicMax(float *addr, float value)
 }
 
 
-__global__ void get_scaling_params_kernel(ColoredPoint* points, int amount, float* min_x, float* min_y, float* max_x, float* max_y) {
+__global__ void get_scaling_params_kernel(ColoredPoint* points, int amount, float* min_x, float* min_y, float* max_x, float* max_y,
+    float* min_r, float* min_g, float* min_b, float* max_r, float* max_g, float* max_b) {
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
         ColoredPoint* current_point = points + idx;
         fatomicMin(min_x, (float) current_point->pos.at(0, 0));
         fatomicMin(min_y, (float) current_point->pos.at(1, 0));
         fatomicMax(max_x, (float) current_point->pos.at(0, 0));
         fatomicMax(max_y, (float) current_point->pos.at(1, 0));
+        
+        fatomicMin(min_r, (float) current_point->color.at(0, 0));
+        fatomicMin(min_g, (float) current_point->color.at(1, 0));
+        fatomicMin(min_b, (float) current_point->color.at(2, 0));
+        fatomicMax(max_r, (float) current_point->color.at(0, 0));
+        fatomicMax(max_g, (float) current_point->color.at(1, 0));
+        fatomicMax(max_b, (float) current_point->color.at(2, 0));
     }
 }
 
@@ -636,11 +651,19 @@ void create_triangle_gpu_with_frames(ColoredPoint* host_points, int amount, int 
 
 
     float* scaling_data = nullptr;
-    cudaMallocAsync(&scaling_data, 4 * sizeof(float), stream);
+    cudaMallocAsync(&scaling_data, 10 * sizeof(float), stream);
     float* min_x = scaling_data;
     float* min_y = scaling_data + 1;
     float* max_x = scaling_data + 2;
     float* max_y = scaling_data + 3;
+    
+    float* min_r = scaling_data + 4;
+    float* min_g = scaling_data + 5;
+    float* min_b = scaling_data + 6;
+
+    float* max_r = scaling_data + 7;
+    float* max_g = scaling_data + 8;
+    float* max_b = scaling_data + 9;
 
     uint8_t* save_buffer = (uint8_t*)malloc(width * height * sizeof(uint8_t) * 3);
 
@@ -662,12 +685,26 @@ void create_triangle_gpu_with_frames(ColoredPoint* host_points, int amount, int 
         cudaMemsetAsync(min_y, 1, sizeof(float), stream);
         cudaMemsetAsync(max_x, 0, sizeof(float), stream);
         cudaMemsetAsync(max_y, 0, sizeof(float), stream);
+        cudaMemsetAsync(min_r, 1, sizeof(float), stream);
+        cudaMemsetAsync(min_g, 1, sizeof(float), stream);
+        cudaMemsetAsync(min_b, 1, sizeof(float), stream);
+        cudaMemsetAsync(max_r, 0, sizeof(float), stream);
+        cudaMemsetAsync(max_g, 0, sizeof(float), stream);
+        cudaMemsetAsync(max_b, 0, sizeof(float), stream);
         get_scaling_params_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
-            output, amount, min_x, min_y, max_x, max_y
+            output, amount, min_x, min_y, max_x, max_y, min_r, min_g, min_b, max_r, max_g, max_b
         );
+        float cpu_minr = 1;
+        cudaMemcpyAsync(&cpu_minr, min_r, sizeof(float), cudaMemcpyDeviceToHost, stream);
+        float cpu_maxr = 0;
+        cudaMemcpyAsync(&cpu_maxr, max_r, sizeof(float), cudaMemcpyDeviceToHost, stream);
+
+        printf("cpu_minr: %f\n", cpu_minr);
+        printf("cpu_maxr: %f\n", cpu_maxr);
         create_image_floaty_gpu_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
             output, amount, gpu_floaty_save_buffer, width, height,
-            min_x, min_y, max_x, max_y
+            min_x, min_y, max_x, max_y,
+            min_r, min_g, min_b, max_r, max_g, max_b
         );
 
         float_to_uint8_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
@@ -747,29 +784,28 @@ Matrix<3, 3> create_random_affine_matrix_color() {
 
 int main() {
     // 4321
-    stablerand_init(&stable_random, 1415154);
+    stablerand_init(&stable_random, 79878);
     //srand(4321);
-    int width = 200;
-    int height = 200;
+    int width = 1000;
+    int height = 1000;
     int image_size = width * height;
 
 
     Matrix<3, 3> randomMatrixOne = create_random_affine_matrix();
     Matrix<3, 3> randomMatrixTwo = create_random_affine_matrix();
     Matrix<3, 3> randomMatrixThree = create_random_affine_matrix();
-    randomMatrixOne.print();
-    Matrix<3, 3> matrixesArray[3] = {randomMatrixOne, randomMatrixTwo, randomMatrixThree};
-    cudaMemcpyToSymbol(global_matrixes_data, &matrixesArray, sizeof(Matrix<3, 3>)*3);
-    
     Matrix<3, 3> randomColorMatrixOne = create_random_affine_matrix_color();
     Matrix<3, 3> randomColorMatrixTwo = create_random_affine_matrix_color();
     Matrix<3, 3> randomColorMatrixThree = create_random_affine_matrix_color();
-    Matrix<3, 3> matrixesColorArray[3] = {randomMatrixOne, randomMatrixTwo, randomMatrixThree};
-    cudaMemcpyToSymbol(global_matrixes_data + 3, &matrixesColorArray, sizeof(Matrix<3, 3>)*3);
+    randomMatrixOne.print();
     randomColorMatrixOne.print();
 
+    Matrix<3, 3> matrixesArray[6] = {randomMatrixOne, randomMatrixTwo, randomMatrixThree, randomColorMatrixOne, randomColorMatrixTwo, randomColorMatrixThree};
+    cudaMemcpyToSymbol(global_matrixes_data, &matrixesArray, sizeof(Matrix<3, 3>)*6);
+
+
     // Generate random points
-    int amount = 400000;
+    int amount = 4000000;
     printf("Generating random points...\n");
     ColoredPoint* points = generate_random_points(amount);
     ColoredPoint* buffer = (ColoredPoint*)malloc(amount * sizeof(ColoredPoint));
