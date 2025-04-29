@@ -5,7 +5,7 @@
 #include <curand.h>
 #include <curand_kernel.h>
 #include "stable_random.h"
-#include <algorithm>
+//#include <algorithm>
 #include <array>
 #include <random>
 
@@ -103,8 +103,8 @@ void setTopMatrix(Matrix<3,3>* matrix) {
 Matrix<3, 3> create_random_scale_matrix() {
     Matrix<3, 3> matrix;
     double data[3][3] = {
-        {(double)stablerand_next(&stable_random), 0, 0},
-        {0, (double)stablerand_next(&stable_random), 0},
+        {(double)stablerand_next(&stable_random) *2 - 1, 0, 0},
+        {0, (double)stablerand_next(&stable_random) * 2 - 1, 0},
         {0, 0, 1},
     };
     matrix.setData(data);
@@ -123,7 +123,7 @@ Matrix<3, 3> create_random_translation_matrix() {
 
 Matrix<3, 3> create_random_rotation_matrix() {
     Matrix<3, 3> matrix;
-    double angle = ((double)stablerand_next(&stable_random)) * 2 * OUR_PI;
+    double angle = ((double)stablerand_next(&stable_random)) * 2 * OUR_PI - OUR_PI;
     double data[3][3] = {
         {cos(angle), -sin(angle), 0},
         {sin(angle), cos(angle), 0},
@@ -135,8 +135,8 @@ Matrix<3, 3> create_random_rotation_matrix() {
 Matrix<3, 3> create_random_shear_matrix() {
     Matrix<3, 3> matrix;
     double data[3][3] = {
-        {1, (double)stablerand_next(&stable_random), 0},
-        {(double)stablerand_next(&stable_random), 1, 0},
+        {1, (double)stablerand_next(&stable_random) * 2 - 1, 0},
+        {(double)stablerand_next(&stable_random) * 2 -1, 1, 0},
         {0, 0, 1},
     };
     matrix.setData(data);
@@ -198,20 +198,26 @@ Matrix<3, 3> create_color_shift_matrix_2() {
     return matrix;
 }
 
+void shuffle_array_in_place(int* arr, int size) {
+    for (int i = size - 1; i > 0; i--) {
+        int j = (int)(stablerand_next(&stable_random) * (i + 1));
+        if (j != i) {
+            int temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+        }
+    }
+}
+
+
 // assume Matrix<3,3> has a setData(double[3][3]) member
 Matrix<3, 3> create_random_color_shift(bool excludeIdentity = true) {
     // permutation array: index = destination channel 0=R,1=G,2=B
     // value = source channel to map from
-    std::array<int,3> perm = {0, 1, 2};
-    
-    // random engine
-    static std::random_device rd;
-    static std::mt19937       gen(rd());
-    
-    // optionally avoid the identity mapping {0,1,2}
-    do {
-        std::shuffle(perm.begin(), perm.end(), gen);
-    } while (excludeIdentity && perm == std::array<int,3>{0,1,2});
+
+    int perm[3] = {0, 1, 2};
+    shuffle_array_in_place(perm, 3);
+   
     
     // build the scaled permutation matrix
     double data[3][3] = {{0}};
@@ -347,8 +353,12 @@ uint8_t* scale_to_image(ColoredPoint* points, int amount, int width, int height)
 
 __global__ void create_triangle_gpu_kernel(ColoredPoint* points, int amount, int iterations, ColoredPoint* buffer, curandState* rng_states) {
     Matrix<3, 3>* global_matrixes = (Matrix<3, 3>*)global_matrixes_data;
+
     // striding
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < amount; idx += blockDim.x * gridDim.x) {
+        ColoredPoint* og_buffer = buffer + idx;
+
+
         curandState* state = &rng_states[idx];
         Matrix<3, 3>* random_pos_matrix;
         Matrix<3, 3>* random_color_matrix;
@@ -362,25 +372,29 @@ __global__ void create_triangle_gpu_kernel(ColoredPoint* points, int amount, int
         for (int j = 0; j < iterations; j++) {
             random_pos_matrix = get_random_point_gpu(state, &global_matrixes[0], &global_matrixes[1], &global_matrixes[2]);
             random_color_matrix = get_random_point_gpu(state, &global_matrixes[3], &global_matrixes[4], &global_matrixes[5]);
-            random_pos_matrix->mult(&current_point->pos, &buffer->pos);
-            random_color_matrix->mult(&current_point->color, &buffer->color);
+            //Matrix<3, 1> current_pos = current_point->pos;
+            //buffer_point->pos = current_pos;
+
+            random_pos_matrix->mult(&current_point->pos, &buffer_point->pos);
+            random_color_matrix->mult(&current_point->color, &buffer_point->color);
 
             // color correcting
-            buffer->color.at(2, 0) = 1.0;
+            buffer_point->color.at(2, 0) = 1.0;
             for(int i = 0; i < 2; i++) {
-                buffer->color.at(i, 0) = fminf(fmaxf(buffer->color.at(i, 0), 0.0f), 1.0f);
+                buffer_point->color.at(i, 0) = fminf(fmaxf(buffer_point->color.at(i, 0), 0.0f), 1.0f);
             }
 
             // we move the pointers around instead of copying the data
+            temp = current_point;
             current_point = buffer_point;
             buffer_point = temp;
-            temp = current_point;
         }
-        if (iterations % 2 == 0) {
+        /*og_buffer = *current_point;
+        if (iterations % 2 != 0) {
             // we have a even amount of operations done and such, te last result is in the points and not in the buffer.
             // so we copy it over
-            *buffer_point = *current_point;
-        }
+            *og_buffer = *current_point;
+        }*/
     }
 }
 
@@ -487,9 +501,19 @@ __global__ void create_image_floaty_gpu_kernel(ColoredPoint* points, int amount,
         uint fourthIndexG = fourthIndexR + 1;
         uint fourthIndexB = fourthIndexG + 1;
 
-        double rValue = current_point->color.at(0, 0) * 255;
-        double gValue = current_point->color.at(1, 0) * 255;
-        double bValue = current_point->color.at(2, 0) * 255;
+        double rValue = current_point->color.at(0, 0);
+        double gValue = current_point->color.at(1, 0);
+        double bValue = current_point->color.at(2, 0);
+
+        rValue = 1;
+        gValue = 1;
+        bValue = 1;
+        //w1 = 1;
+        //w2 = 0;
+        //w3 = 0;
+        //w4 = 0;
+
+
         // atomic adds
 
         atomicAdd(&image_data[firstIndexR], w1 * rValue * mult);
@@ -603,12 +627,12 @@ void create_triangle_gpu_with_frames(ColoredPoint* host_points, int amount, int 
     //cudaDeviceSynchronize();
 
     float* gpu_floaty_save_buffer = nullptr;
-    cudaMallocAsync(&gpu_floaty_save_buffer, width * height * sizeof(float), stream);
-    cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float), stream);
+    cudaMallocAsync(&gpu_floaty_save_buffer, width * height * sizeof(float) * 3, stream);
+    cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float) * 3, stream);
 
     uint8_t* gpu_save_buffer = nullptr;
-    cudaMallocAsync(&gpu_save_buffer, width * height * sizeof(uint8_t), stream);
-    cudaMemsetAsync(gpu_save_buffer, 0, width * height * sizeof(uint8_t), stream);
+    cudaMallocAsync(&gpu_save_buffer, width * height * sizeof(uint8_t) * 3, stream);
+    cudaMemsetAsync(gpu_save_buffer, 0, width * height * sizeof(uint8_t) * 3, stream);
 
 
     float* scaling_data = nullptr;
@@ -618,10 +642,10 @@ void create_triangle_gpu_with_frames(ColoredPoint* host_points, int amount, int 
     float* max_x = scaling_data + 2;
     float* max_y = scaling_data + 3;
 
-    uint8_t* save_buffer = (uint8_t*)malloc(width * height * sizeof(uint8_t));
+    uint8_t* save_buffer = (uint8_t*)malloc(width * height * sizeof(uint8_t) * 3);
 
     bool using_a_as_input = true;
-
+    printf("starting \n");
     // changed ordering so that the gpu is busy when the cpu is busy
     for (int j = 0; j < iterations; j++) {
         ColoredPoint* input = using_a_as_input ? gpu_a : gpu_b;
@@ -647,13 +671,12 @@ void create_triangle_gpu_with_frames(ColoredPoint* host_points, int amount, int 
         );
 
         float_to_uint8_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
-            gpu_floaty_save_buffer, gpu_save_buffer, width * height
+            gpu_floaty_save_buffer, gpu_save_buffer, width * height * 3
         );
-        cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float), stream);
-
-
+        cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float) * 3, stream);
+        printf("starting memcopy\n");
         // Copy for frame
-        cudaMemcpyAsync(save_buffer, gpu_save_buffer, width * height * sizeof(uint8_t), cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(save_buffer, gpu_save_buffer, width * height * sizeof(uint8_t) * 3, cudaMemcpyDeviceToHost, stream);
 
         // Save image
         //rescale_points(save_buffer, amount);
@@ -661,7 +684,9 @@ void create_triangle_gpu_with_frames(ColoredPoint* host_points, int amount, int 
         //uint8_t* image_array = scale_to_image(save_buffer, amount, width, height);
         char filename[64];
         snprintf(filename, sizeof(filename), "./vid_imgs/frame_%03d.ppm", j);
+        printf("saving image %s\n", filename);
         save_image_with_name(save_buffer, width, height, filename);
+        printf("done\n");
         //free(image_array);
 
         using_a_as_input = !using_a_as_input;
@@ -722,10 +747,10 @@ Matrix<3, 3> create_random_affine_matrix_color() {
 
 int main() {
     // 4321
-    stablerand_init(&stable_random, 7878778);
+    stablerand_init(&stable_random, 1415154);
     //srand(4321);
-    int width = 1000;
-    int height = 1000;
+    int width = 200;
+    int height = 200;
     int image_size = width * height;
 
 
@@ -739,9 +764,12 @@ int main() {
     Matrix<3, 3> randomColorMatrixOne = create_random_affine_matrix_color();
     Matrix<3, 3> randomColorMatrixTwo = create_random_affine_matrix_color();
     Matrix<3, 3> randomColorMatrixThree = create_random_affine_matrix_color();
+    Matrix<3, 3> matrixesColorArray[3] = {randomMatrixOne, randomMatrixTwo, randomMatrixThree};
+    cudaMemcpyToSymbol(global_matrixes_data + 3, &matrixesColorArray, sizeof(Matrix<3, 3>)*3);
+    randomColorMatrixOne.print();
 
     // Generate random points
-    int amount = 40000000;
+    int amount = 400000;
     printf("Generating random points...\n");
     ColoredPoint* points = generate_random_points(amount);
     ColoredPoint* buffer = (ColoredPoint*)malloc(amount * sizeof(ColoredPoint));
