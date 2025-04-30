@@ -16,7 +16,7 @@ class Matrix {
         return data[row][col];
     }
 
-    void setData(const double newData[TRows][TCols]) {
+    __device__ __host__   void setData(const double newData[TRows][TCols]) {
         for (int i = 0; i < TRows; i++) {
             for (int j = 0; j < TCols; j++) {
                 data[i][j] = newData[i][j];
