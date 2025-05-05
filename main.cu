@@ -1073,6 +1073,34 @@ Matrix<4, 4> create_random_affine_matrix_color() {
     return scale_matrix * rotation_matrix * translation_matrix;
 }
 
+template <size_t T>
+Matrix<T, T>* random_matrix_cpu(Matrix<T, T>* firstMatrix, Matrix<T, T>* secondMatrix, Matrix<T,T>* thridMatrix) {
+    int index = ((int)(stablerand_next(&stable_random) * 3)) % 3;
+
+    if (index == 0) {
+        return firstMatrix;
+    }
+    if (index == 1) {
+        return secondMatrix;
+    }
+    return thridMatrix;
+}
+
+
+
+void create_triangle_cpu_single(ColoredPoint* host_points, int amount, int iterations,
+    int width, int height, char* output_buffer, float* cpu_measured_time, char* big_buffer_of_matrixes) {
+        Matrix<3, 3>* pos_random_matrixes = (Matrix<3, 3>*) big_buffer_of_matrixes;
+        char* color_rnd_point = big_buffer_of_matrixes + 3 * sizeof(Matrix<3, 3>);
+        Matrix<4, 4>* color_random_matrixes = (Matrix<4,4>*) color_rnd_point;
+
+        for (int i = 0; i < iterations; i++) {
+            for (int j = 0; j < amount; j++) {
+                ColoredPoint* point = host_points + j;
+                Matrix<3, 3>* random_pos_matrix = random_matrix_cpu(&pos_random_matrixes[0], &pos_random_matrixes[1], &pos_random_matrixes[2]);
+            }
+        }
+}
 
 
 int main() {
