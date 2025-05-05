@@ -8,7 +8,7 @@
 //#include <algorithm>
 #include <array>
 #include <random>
-
+#include <chrono>
 
 # define OUR_PI		3.14159265358979323846	/* pi */
 # define OUR_E        2.71828182845904523536	/* e */
@@ -837,6 +837,148 @@ void create_triangle_gpu_with_frames(ColoredPoint* host_points, int amount, int 
     free(save_buffer);
 }
 
+
+// Main function with fixed RNG setup
+void create_triangle_gpu_single(ColoredPoint* host_points, int amount, int iterations,
+    int width, int height, char* output_buffer, float* cpu_measured_time)
+{
+    auto start = std::chrono::high_resolution_clock::now();
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+
+
+    // Allocate GPU memory
+    ColoredPoint* gpu_a;
+    ColoredPoint* gpu_b;
+
+    cudaMallocAsync(&gpu_a, amount * sizeof(ColoredPoint), stream);
+    cudaMallocAsync(&gpu_b, amount * sizeof(ColoredPoint), stream);
+
+    // Copy initial points
+    cudaMemcpyAsync(gpu_a, host_points, amount * sizeof(ColoredPoint), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(gpu_b, host_points, amount * sizeof(ColoredPoint), cudaMemcpyHostToDevice, stream);
+
+    // Allocate and setup RNG states
+    curandState* d_states;
+    cudaMallocAsync(&d_states, amount * sizeof(curandState), stream);
+
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (amount + threadsPerBlock - 1) / threadsPerBlock;
+    blocksPerGrid = min(blocksPerGrid, 65535); // Limit to 65535 blocks
+
+    // ✅ Pass `amount` to RNG setup kernel
+    setup_rng_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(d_states, amount, time(NULL));
+    //cudaDeviceSynchronize();
+
+    float* gpu_floaty_save_buffer = nullptr;
+    cudaMallocAsync(&gpu_floaty_save_buffer, width * height * sizeof(float) * 3, stream);
+    cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float) * 3, stream);
+
+    uint8_t* gpu_save_buffer = nullptr;
+    cudaMallocAsync(&gpu_save_buffer, width * height * sizeof(uint8_t) * 3, stream);
+    cudaMemsetAsync(gpu_save_buffer, 0, width * height * sizeof(uint8_t) * 3, stream);
+
+
+    float* scaling_data = nullptr;
+    cudaMallocAsync(&scaling_data, 10 * sizeof(float), stream);
+    float* min_x = scaling_data;
+    float* min_y = scaling_data + 1;
+    float* max_x = scaling_data + 2;
+    float* max_y = scaling_data + 3;
+    
+    float* min_r = scaling_data + 4;
+    float* min_g = scaling_data + 5;
+    float* min_b = scaling_data + 6;
+
+    float* max_r = scaling_data + 7;
+    float* max_g = scaling_data + 8;
+    float* max_b = scaling_data + 9;
+
+    float fixed_min_start = 1000;
+    float fixed_max_start = -1000;
+
+    // changed ordering so that the gpu is busy when the cpu is busy
+
+    ColoredPoint* input = gpu_a;
+    ColoredPoint* output = gpu_b;
+
+
+    create_triangle_gpu_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+        input, amount, iterations, output,
+        d_states
+    );
+
+    ColoredPoint temp[10];
+    cudaMemcpyAsync(temp, output, 10 * sizeof(ColoredPoint), cudaMemcpyDeviceToHost, stream);
+
+    //cudaDeviceSynchronize();
+
+    cudaMemcpyAsync(min_x, &fixed_min_start, sizeof(float),cudaMemcpyHostToDevice,stream);
+    cudaMemcpyAsync(min_y, &fixed_min_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_x, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_y, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice,stream);
+    cudaMemcpyAsync(min_r, &fixed_min_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(min_g, &fixed_min_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(min_b, &fixed_min_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_r, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_g, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_b, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    get_scaling_params_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+        output, amount, min_x, min_y, max_x, max_y, min_r, min_g, min_b, max_r, max_g, max_b
+    );
+
+    create_image_floaty_gpu_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+        output, amount, gpu_floaty_save_buffer, width, height,
+        min_x, min_y, max_x, max_y,
+        min_r, min_g, min_b, max_r, max_g, max_b
+    );
+
+    cudaMemcpyAsync(min_r, &fixed_min_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(min_g, &fixed_min_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(min_b, &fixed_min_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_r, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_g, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaMemcpyAsync(max_b, &fixed_max_start, sizeof(float), cudaMemcpyHostToDevice, stream);
+    // get the scaling now that all is accumulated!
+    get_color_scaling_params<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+        gpu_floaty_save_buffer, width * height, min_r, min_g, min_b, max_r, max_g, max_b
+    );
+    
+
+    float_to_uint8_kernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(
+        gpu_floaty_save_buffer, gpu_save_buffer, width * height, min_r, min_g, min_b, max_r, max_g, max_b
+    );
+    cudaMemsetAsync(gpu_floaty_save_buffer, 0, width * height * sizeof(float) * 3, stream);
+    // Copy for frame
+    cudaMemcpyAsync(output_buffer, gpu_save_buffer, width * height * sizeof(uint8_t) * 3, cudaMemcpyDeviceToHost, stream);
+
+    // Save image
+    //rescale_points(save_buffer, amount);
+
+    //uint8_t* image_array = scale_to_image(save_buffer, amount, width, height);
+    //free(image_array);
+
+
+    // Copy final result
+    ColoredPoint* final_output = gpu_b;
+    cudaMemcpyAsync(host_points, final_output, amount * sizeof(Matrix<3, 1>), cudaMemcpyDeviceToHost, stream);
+
+    // Cleanup
+    cudaFreeAsync(gpu_a, stream);
+    cudaFreeAsync(gpu_b, stream);
+    cudaFreeAsync(d_states, stream);
+    cudaFreeAsync(gpu_floaty_save_buffer, stream);
+    cudaFreeAsync(gpu_save_buffer, stream);
+    cudaFreeAsync(scaling_data, stream);
+    cudaStreamSynchronize(stream);
+    cudaStreamDestroy(stream);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration_ms = end - start;
+    *cpu_measured_time = duration_ms.count();
+}
+
+
 void create_triangle_gpu(ColoredPoint* points, int amount, int iterations) {
     ColoredPoint* gpu_points;
     ColoredPoint* gpu_buffer;
@@ -932,12 +1074,13 @@ Matrix<4, 4> create_random_affine_matrix_color() {
 }
 
 
+
 int main() {
     // 4321
     stablerand_init(&stable_random, 929290504577);
     //srand(4321);
-    int width = 1000;
-    int height = 1000;
+    int width = 200;
+    int height = 200;
     int image_size = width * height;
 
 
@@ -947,10 +1090,10 @@ int main() {
     Matrix<4, 4> randomColorMatrixOne = create_random_affine_matrix_color();
     Matrix<4, 4> randomColorMatrixTwo = create_random_affine_matrix_color();
     Matrix<4, 4> randomColorMatrixThree = create_random_affine_matrix_color();
-    randomMatrixOne.print();
-    randomColorMatrixOne.print();
-    randomMatrixTwo.print();
-    randomColorMatrixThree.print();
+    //randomMatrixOne.print();
+    //randomColorMatrixOne.print();
+    //randomMatrixTwo.print();
+    //randomColorMatrixThree.print();
 
     Matrix<3, 3> matrixesArray[3] = {randomMatrixOne, randomMatrixTwo, randomMatrixThree};
     cudaMemcpyToSymbol(global_matrixes_data, &matrixesArray, sizeof(Matrix<3, 3>) * 3);
@@ -973,28 +1116,30 @@ int main() {
 
 
     // Generate random points
-    int amount = 4000000;
-    printf("Generating random points...\n");
+    int amount = 400000;
+    //printf("Generating random points...\n");
     ColoredPoint* points = generate_random_points(amount);
     points[0].color.print();
 
     ColoredPoint* buffer = (ColoredPoint*)malloc(amount * sizeof(ColoredPoint));
 
 
-    printf("done\n");
-    printf("Creating triangle...");
+    //printf("done\n");
+    //printf("Creating triangle...\n");
     //create_triangle(points, amount, 200, buffer, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
     // create_triangle_gpu(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix);
-    create_triangle_gpu_with_frames(points, amount, 200, width, height);
-    //create_triangle_gpu(points, amount, 200, randomMatrixOne, randomMatrixTwo, randomMatrixThree);
-    printf("done\n");
-    printf("Rescaling points...");
-    rescale_points(points, amount);
-    printf("done\n");
-    printf("Creating to image...");
-    uint8_t* image_array = scale_to_image(points, amount, width, height);
-    printf("done\n");
-    
+    //create_triangle_gpu_with_frames(points, amount, 200, width, height);
+    char* outputBuffer = (char*)malloc(width * height * 3 * sizeof(char));
+    ColoredPoint* clonedPointsForMeasure = (ColoredPoint*) malloc(amount * sizeof(ColoredPoint));
+    printf("Amount of iterations, time\n");
+    for (int i = 10; i < 2000; i += 10) {
+        float timeValue = -1;
+        memcpy(clonedPointsForMeasure, points, amount * sizeof(ColoredPoint));
+        create_triangle_gpu_single(points, amount, 1000, width, height, outputBuffer, &timeValue);
+        printf("%d, %f\n", i, timeValue);
+
+    }
+    save_image_with_name((uint8_t*) outputBuffer, width, height, "output.ppm");
     
     // Save the image
     //save_black_white_image(image_array, width, height);
@@ -1002,7 +1147,8 @@ int main() {
     system("ffmpeg -y -framerate 5 -i ./vid_imgs/frame_%03d.ppm -c:v libx264 -pix_fmt yuv420p output.mp4");
     
     // Free the memory
-    free(image_array);
+    free(outputBuffer);
+    free(clonedPointsForMeasure);
     free(points);
     free(buffer);
     
