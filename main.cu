@@ -1089,17 +1089,21 @@ Matrix<T, T>* random_matrix_cpu(Matrix<T, T>* firstMatrix, Matrix<T, T>* secondM
 
 
 void create_triangle_cpu_single(ColoredPoint* host_points, int amount, int iterations,
-    int width, int height, char* output_buffer, float* cpu_measured_time, char* big_buffer_of_matrixes) {
-        Matrix<3, 3>* pos_random_matrixes = (Matrix<3, 3>*) big_buffer_of_matrixes;
-        char* color_rnd_point = big_buffer_of_matrixes + 3 * sizeof(Matrix<3, 3>);
-        Matrix<4, 4>* color_random_matrixes = (Matrix<4,4>*) color_rnd_point;
+    int width, int height, char* output_buffer, float* cpu_measured_time, Matrix<3, 3>* pos_random_matrixes, Matrix<4, 4>* color_random_matrixes) {
+        auto start = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < iterations; i++) {
             for (int j = 0; j < amount; j++) {
                 ColoredPoint* point = host_points + j;
                 Matrix<3, 3>* random_pos_matrix = random_matrix_cpu(&pos_random_matrixes[0], &pos_random_matrixes[1], &pos_random_matrixes[2]);
+                Matrix<4, 4>* random_color_matrix = random_matrix_cpu(&color_random_matrixes[0], &color_random_matrixes[1], &color_random_matrixes[2]);
+                point->pos = (*random_pos_matrix) * point->pos;
+                point->color = (*random_color_matrix) * point->color;
             }
         }
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> duration_ms = end - start;
+        *cpu_measured_time = duration_ms.count();
 }
 
 
@@ -1129,6 +1133,7 @@ int main() {
     Matrix<4,4> colorMatrixesArray[3] = { randomColorMatrixOne, randomColorMatrixTwo, randomColorMatrixThree};
     cudaMemcpyToSymbol(global_matrixes_data, &colorMatrixesArray, sizeof(Matrix<4, 4>) * 3, sizeof(Matrix<3, 3>) * 3);
 
+
     /*char bigTestBuffer[sizeof(Matrix<3, 3>) * 3 + sizeof(Matrix<4, 4>) * 3];
     memcpy(bigTestBuffer, matrixesArray, sizeof(sizeof(Matrix<3, 3>) * 3));
 
@@ -1144,10 +1149,10 @@ int main() {
 
 
     // Generate random points
-    int amount = 400000;
+    int amount = 400;
     //printf("Generating random points...\n");
     ColoredPoint* points = generate_random_points(amount);
-    points[0].color.print();
+    //points[0].color.print();
 
     ColoredPoint* buffer = (ColoredPoint*)malloc(amount * sizeof(ColoredPoint));
 
@@ -1158,15 +1163,40 @@ int main() {
     // create_triangle_gpu(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix);
     //create_triangle_gpu_with_frames(points, amount, 200, width, height);
     char* outputBuffer = (char*)malloc(width * height * 3 * sizeof(char));
-    ColoredPoint* clonedPointsForMeasure = (ColoredPoint*) malloc(amount * sizeof(ColoredPoint));
-    printf("Amount of iterations, time\n");
-    for (int i = 10; i < 2000; i += 10) {
-        float timeValue = -1;
-        memcpy(clonedPointsForMeasure, points, amount * sizeof(ColoredPoint));
-        create_triangle_gpu_single(points, amount, 1000, width, height, outputBuffer, &timeValue);
-        printf("%d, %f\n", i, timeValue);
+    printf("Amount of iterations, Amount of points, Time GPU, Time CPU\n");
 
+    for (int k = 10; k < 400; k += 20) {
+        ColoredPoint* localPoints = generate_random_points(k);
+        ColoredPoint* localBuffer = (ColoredPoint*)malloc(k * sizeof(ColoredPoint));
+        ColoredPoint* clonedPointsForMeasureGPU = (ColoredPoint*) malloc(k * sizeof(ColoredPoint));
+        ColoredPoint* clonedPointsForMeasureCPU = (ColoredPoint*) malloc(k * sizeof(ColoredPoint));
+
+        for (int i = 10; i < 1000; i += 50) {
+
+            float gpuTimeSum = 0;
+            float cpuTimeSum = 0;
+            for (int j = 0; j < 10; j++) {
+                memcpy(clonedPointsForMeasureCPU, localPoints, k * sizeof(ColoredPoint));
+                memcpy(clonedPointsForMeasureGPU, localPoints, k * sizeof(ColoredPoint));
+                float gpuTime = 0;
+                float cpuTime = 0;
+                create_triangle_gpu_single(clonedPointsForMeasureCPU, k, i, width, height, outputBuffer, &gpuTime);
+                create_triangle_cpu_single(clonedPointsForMeasureGPU, k, i, width, height, outputBuffer, &cpuTime, &matrixesArray[0], &colorMatrixesArray[0]);
+                gpuTimeSum += gpuTime;
+                cpuTimeSum += cpuTime;
+            }
+            gpuTimeSum /= 10;
+            cpuTimeSum /= 10;
+    
+            printf("%d, %d, %f, %f\n", i, k, gpuTimeSum, cpuTimeSum);
+    
+        }
+        free(localBuffer);
+        free(clonedPointsForMeasureGPU);
+        free(clonedPointsForMeasureCPU);
+        free(localPoints);
     }
+
     save_image_with_name((uint8_t*) outputBuffer, width, height, "output.ppm");
     
     // Save the image
@@ -1176,7 +1206,6 @@ int main() {
     
     // Free the memory
     free(outputBuffer);
-    free(clonedPointsForMeasure);
     free(points);
     free(buffer);
     
