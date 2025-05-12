@@ -954,8 +954,8 @@ void create_triangle_gpu_single(ColoredPoint* host_points, int amount, int itera
 
     // Save image
     //rescale_points(save_buffer, amount);
-
-    //uint8_t* image_array = scale_to_image(save_buffer, amount, width, height);
+    save_image_array("./vid_imgs/frame.ppm", (uint8_t*)output_buffer);
+    //int8_t* image_array = scale_to_image(save_buffer, amount, width, height);
     //free(image_array);
 
 
@@ -1111,8 +1111,8 @@ int main() {
     // 4321
     stablerand_init(&stable_random, 929290504577);
     //srand(4321);
-    int width = 200;
-    int height = 200;
+    int width = 1000;
+    int height = 1000;
     int image_size = width * height;
 
 
@@ -1149,23 +1149,24 @@ int main() {
 
 
     // Generate random points
-    int amount = 400;
+    int amount = 400000;
     //printf("Generating random points...\n");
     ColoredPoint* points = generate_random_points(amount);
     //points[0].color.print();
 
     ColoredPoint* buffer = (ColoredPoint*)malloc(amount * sizeof(ColoredPoint));
-
+    char* outputBuffer = (char*)malloc(width * height * 3 * sizeof(char));
 
     //printf("done\n");
-    //printf("Creating triangle...\n");
+    printf("Creating triangle...\n");
     //create_triangle(points, amount, 200, buffer, &bottomLeftMatrix, &bottomRightMatrix, &topMatrix);
     // create_triangle_gpu(points, amount, 20, bottomLeftMatrix, bottomRightMatrix, topMatrix);
-    //create_triangle_gpu_with_frames(points, amount, 200, width, height);
-    char* outputBuffer = (char*)malloc(width * height * 3 * sizeof(char));
+    create_triangle_gpu_with_frames(points, amount, 200, width, height);
+    float unusedTime = 0;
+    create_triangle_gpu_single(points, amount, 200, width, height, outputBuffer, &unusedTime);
     printf("Amount of iterations, Amount of points, Time GPU, Time CPU\n");
 
-    for (int k = 10; k < 400; k += 20) {
+    /*for (int k = 10; k < 400; k += 20) {
         ColoredPoint* localPoints = generate_random_points(k);
         ColoredPoint* localBuffer = (ColoredPoint*)malloc(k * sizeof(ColoredPoint));
         ColoredPoint* clonedPointsForMeasureGPU = (ColoredPoint*) malloc(k * sizeof(ColoredPoint));
@@ -1195,7 +1196,7 @@ int main() {
         free(clonedPointsForMeasureGPU);
         free(clonedPointsForMeasureCPU);
         free(localPoints);
-    }
+    }*/
 
     save_image_with_name((uint8_t*) outputBuffer, width, height, "output.ppm");
     
